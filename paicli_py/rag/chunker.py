@@ -58,9 +58,52 @@ class CodeChunker:
         suffix = file_path.suffix.lower()
         if suffix == ".py":
             chunks = cls._chunk_python(rel_path, text, lines)
+        elif suffix == ".java":
+            chunks = cls._chunk_java(rel_path, text, lines)
         else:
-            # 降级为按行分块
             chunks = cls._chunk_by_lines(file_path, text)
+
+        return chunks
+
+    @classmethod
+    def _chunk_java(cls, rel_path: str, text: str, lines: list[str]) -> list[CodeChunk]:
+        """Java 正则分块：文件级 + 类级 + 方法级（与 Java JavaParser 分块语义等价）。"""
+        import re
+        chunks: list[CodeChunk] = []
+
+        # 文件级
+        chunks.append(CodeChunk(file_path=rel_path, chunk_type="file", name=rel_path,
+                                content=text[:2000], start_line=1, end_line=len(lines)))
+
+        # 类级
+        for m in re.finditer(r"(?:public\s+|private\s+|protected\s+)?(?:abstract\s+|final\s+)?class\s+(\w+)", text):
+            class_name = m.group(1)
+            start = text[:m.start()].count("\n") + 1
+            # 找类体结束（括号匹配）
+            depth = 0; started = False; end = start
+            for i, line in enumerate(lines[start-1:], start):
+                depth += line.count("{") - line.count("}")
+                if line.count("{") > 0: started = True
+                if started and depth == 0: end = i; break
+            snippet = "\n".join(lines[start-1:end])
+            chunks.append(CodeChunk(file_path=rel_path, chunk_type="class", name=class_name,
+                                    content=snippet[:2000], start_line=start, end_line=end))
+
+        # 方法级
+        for m in re.finditer(r"(?:public|private|protected|static|\s)+([\w<>,\[\]\s]+)\s+(\w+)\s*\([^)]*\)\s*(?:\{|throws)", text):
+            return_type = m.group(1).strip()
+            method_name = m.group(2)
+            if method_name in ("if","for","while","switch","return","new","try","catch"):
+                continue
+            start = text[:m.start()].count("\n") + 1
+            depth = 0; started = False; end = start
+            for i, line in enumerate(lines[start-1:], start):
+                depth += line.count("{") - line.count("}")
+                if line.count("{") > 0: started = True
+                if started and depth == 0: end = i; break
+            snippet = "\n".join(lines[start-1:end])
+            chunks.append(CodeChunk(file_path=rel_path, chunk_type="method", name=method_name,
+                                    content=snippet[:2000], start_line=start, end_line=end))
 
         return chunks
 

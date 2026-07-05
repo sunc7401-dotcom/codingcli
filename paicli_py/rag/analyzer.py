@@ -110,7 +110,7 @@ class CodeAnalyzer:
 
     @classmethod
     def _analyze_java(cls, file_path: Path) -> list[CodeRelation]:
-        """Java 关系分析（降级为正则匹配）。"""
+        """Java 关系分析（正则提取 5 种关系：imports/extends/implements/calls/contains）。"""
         import re
 
         try:
@@ -120,22 +120,68 @@ class CodeAnalyzer:
 
         relations: list[CodeRelation] = []
         rel_path = str(file_path)
+        current_class: str | None = None
 
-        # extends
+        # imports
+        for m in re.finditer(r"^import\s+(?:static\s+)?([\w.]+)\.(\w+)\s*;", source, re.MULTILINE):
+            relations.append(CodeRelation(
+                from_file=rel_path, from_name=None,
+                to_file=rel_path, to_name=m.group(2),
+                relation_type="imports",
+            ))
+
+        # extends + current_class tracking
         for m in re.finditer(r"class\s+(\w+)\s+extends\s+(\w+)", source):
+            current_class = m.group(1)
             relations.append(CodeRelation(
                 from_file=rel_path, from_name=m.group(1),
                 to_file=rel_path, to_name=m.group(2),
                 relation_type="extends",
             ))
+        # class without extends
+        if current_class is None:
+            m = re.search(r"class\s+(\w+)", source)
+            if m: current_class = m.group(1)
 
         # implements
-        for m in re.finditer(r"class\s+(\w+)\s+implements\s+([\w,\s]+)", source):
-            for iface in re.findall(r"(\w+)", m.group(2)):
+        for m in re.finditer(r"class\s+\w+\s+implements\s+([\w,\s<>]+?)\s*\{", source):
+            raw = re.sub(r"<[^>]+>", "", m.group(1))
+            for iface in re.findall(r"(\w+)", raw):
                 relations.append(CodeRelation(
-                    from_file=rel_path, from_name=m.group(1),
+                    from_file=rel_path, from_name=current_class,
                     to_file=rel_path, to_name=iface,
                     relation_type="implements",
+                ))
+
+        # contains: methods declared in class
+        if current_class:
+            for m in re.finditer(r"(?:public|private|protected|static|\s)+([\w<>,\[\]\s]+)\s+(\w+)\s*\([^)]*\)\s*(?:\{|throws)", source):
+                method_name = m.group(2)
+                if method_name == current_class: continue  # constructor
+                relations.append(CodeRelation(
+                    from_file=rel_path, from_name=current_class,
+                    to_file=rel_path, to_name=f"{current_class}.{method_name}",
+                    relation_type="contains",
+                ))
+
+        # calls: method invocations (skip java keywords)
+        _keywords = {"if","for","while","switch","return","throw","new","try","catch","finally","synchronized","assert"}
+        for m in re.finditer(r"(?:(\w+)\.)?(\w+)\s*\(", source):
+            obj = m.group(1)
+            called = m.group(2)
+            if not called or called[0].islower() or called in _keywords:
+                continue
+            if obj:
+                relations.append(CodeRelation(
+                    from_file=rel_path, from_name=current_class,
+                    to_file=rel_path, to_name=f"{obj}.{called}",
+                    relation_type="calls",
+                ))
+            elif called and called[0].isupper():
+                relations.append(CodeRelation(
+                    from_file=rel_path, from_name=current_class,
+                    to_file=rel_path, to_name=called,
+                    relation_type="calls",
                 ))
 
         return relations

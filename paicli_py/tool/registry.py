@@ -227,6 +227,8 @@ class ToolRegistry:
     async def _execute_single(self, tool_call) -> ToolOutput:
         name = tool_call.name if hasattr(tool_call, "name") else tool_call.get("function", {}).get("name", "")
         args_str = tool_call.arguments if hasattr(tool_call, "arguments") else tool_call.get("function", {}).get("arguments", "{}")
+        start_ns = time.monotonic_ns()
+        should_audit = name in AUDIT_TOOLS or name.startswith("mcp__")
         tool = self._tools.get(name)
         if not tool:
             return ToolOutput(tool_name=name, content=f"未知工具: {name}", is_error=True)
@@ -236,8 +238,16 @@ class ToolRegistry:
             return ToolOutput(tool_name=name, content="参数解析失败", is_error=True)
         try:
             content = await tool["executor"](params)
+            if should_audit:
+                from paicli_py.policy.audit_log import AuditEntry
+                duration = int((time.monotonic_ns() - start_ns) / 1_000_000)
+                self._audit_log.record(AuditEntry.allow(name, json.dumps(params, ensure_ascii=False), duration))
             return ToolOutput(tool_name=name, content=content)
         except Exception as e:
+            if should_audit:
+                from paicli_py.policy.audit_log import AuditEntry
+                duration = int((time.monotonic_ns() - start_ns) / 1_000_000)
+                self._audit_log.record(AuditEntry.error(name, json.dumps(params, ensure_ascii=False), str(e), duration))
             return ToolOutput(tool_name=name, content=f"执行异常: {e}", is_error=True)
 
     # ── 内置工具注册 ──────────────────────────────────────
