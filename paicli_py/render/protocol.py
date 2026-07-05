@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from paicli_py.render.status import StatusInfo  # re-export for convenience
-
 if TYPE_CHECKING:
-    from paicli_py.llm.models import ToolCall
     from paicli_py.hitl.approval_request import ApprovalRequest
     from paicli_py.hitl.approval_result import ApprovalResult
+    from paicli_py.llm.models import ToolCall
 
 
 @runtime_checkable

@@ -24,9 +24,12 @@ class AgentBudget:
 
     def __init__(self, token_budget: int = 2147483647, stagnation_window: int = DEFAULT_STAGNATION_WINDOW,
                  hard_max_iterations: int = DEFAULT_HARD_MAX_ITERATIONS) -> None:
-        if token_budget <= 0: raise ValueError("token_budget 必须为正整数")
-        if stagnation_window < 2: raise ValueError("stagnation_window 必须 >= 2")
-        if hard_max_iterations <= 0: raise ValueError("hard_max_iterations 必须为正整数")
+        if token_budget <= 0:
+            raise ValueError("token_budget 必须为正整数")
+        if stagnation_window < 2:
+            raise ValueError("stagnation_window 必须 >= 2")
+        if hard_max_iterations <= 0:
+            raise ValueError("hard_max_iterations 必须为正整数")
         self._token_budget = token_budget
         self._stagnation_window = stagnation_window
         self._hard_max_iterations = hard_max_iterations
@@ -56,8 +59,10 @@ class AgentBudget:
             if raw:
                 try:
                     parsed = int(raw.strip())
-                    if parsed > 0: return parsed
-                except ValueError: continue
+                    if parsed > 0:
+                        return parsed
+                except ValueError:
+                    continue
         return default
 
     def begin_iteration(self) -> int:
@@ -82,28 +87,37 @@ class AgentBudget:
             self._stagnant = all(s == first for s in self._recent_tool_signatures)
 
     def check(self) -> ExitReason:
-        if self._stagnant: return ExitReason.STAGNATION_DETECTED
-        if self._total_input_tokens + self._total_output_tokens >= self._token_budget: return ExitReason.TOKEN_BUDGET_EXCEEDED
-        if self._iteration >= self._hard_max_iterations: return ExitReason.HARD_ITERATION_LIMIT
+        if self._stagnant:
+            return ExitReason.STAGNATION_DETECTED
+        if self._total_input_tokens + self._total_output_tokens >= self._token_budget:
+            return ExitReason.TOKEN_BUDGET_EXCEEDED
+        if self._iteration >= self._hard_max_iterations:
+            return ExitReason.HARD_ITERATION_LIMIT
         return ExitReason.WITHIN_BUDGET
 
     @property
-    def iteration(self) -> int: return self._iteration
+    def iteration(self) -> int:
+        return self._iteration
 
     @property
-    def total_input_tokens(self) -> int: return self._total_input_tokens
+    def total_input_tokens(self) -> int:
+        return self._total_input_tokens
 
     @property
-    def total_output_tokens(self) -> int: return self._total_output_tokens
+    def total_output_tokens(self) -> int:
+        return self._total_output_tokens
 
     @property
-    def total_cached_input_tokens(self) -> int: return self._total_cached_input_tokens
+    def total_cached_input_tokens(self) -> int:
+        return self._total_cached_input_tokens
 
     @property
-    def token_budget(self) -> int: return self._token_budget
+    def token_budget(self) -> int:
+        return self._token_budget
 
     @property
-    def hard_max_iterations(self) -> int: return self._hard_max_iterations
+    def hard_max_iterations(self) -> int:
+        return self._hard_max_iterations
 
     @property
     def stagnation_window(self) -> int: return self._stagnation_window

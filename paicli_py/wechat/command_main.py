@@ -31,11 +31,12 @@ def run_wechat_command(args: list[str]) -> None:
 
 async def _wechat_setup() -> None:
     """微信设置：QR 码登录并保存账号。"""
+    import datetime
+
+    from paicli_py.wechat.account import WechatAccount
+    from paicli_py.wechat.account_store import WechatAccountStore
     from paicli_py.wechat.client import IlinkClient
     from paicli_py.wechat.qr_login import WechatQrLogin
-    from paicli_py.wechat.account_store import WechatAccountStore
-    from paicli_py.wechat.account import WechatAccount
-    import datetime
 
     client = IlinkClient()
     login = WechatQrLogin(client)
@@ -55,8 +56,8 @@ async def _wechat_setup() -> None:
 
 async def _wechat_start() -> None:
     """启动微信消息循环。"""
-    from paicli_py.wechat.client import IlinkClient
     from paicli_py.wechat.account_store import WechatAccountStore
+    from paicli_py.wechat.client import IlinkClient
     from paicli_py.wechat.message_loop import WechatMessageLoop
 
     account = WechatAccountStore.load()

@@ -6,17 +6,17 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
 from paicli_py.agent.agent_budget import AgentBudget, ExitReason
-from paicli_py.llm.models import ChatResponse, Message, StreamListener
+from paicli_py.llm.models import Message, StreamListener
 from paicli_py.prompt.assembler import PromptAssembler
 
 if TYPE_CHECKING:
     from paicli_py.llm.client import LlmClient
-    from paicli_py.memory.manager import MemoryManager
     from paicli_py.render.protocol import Renderer
     from paicli_py.skill.context_buffer import SkillContextBuffer
     from paicli_py.skill.registry import SkillRegistry
@@ -40,8 +40,8 @@ class Agent:
     """
 
     def __init__(self, llm_client: LlmClient, tool_registry: ToolRegistry | None = None) -> None:
-        from paicli_py.memory.manager import MemoryManager
         from paicli_py.memory.history_compactor import ConversationHistoryCompactor
+        from paicli_py.memory.manager import MemoryManager
 
         self._llm_client = llm_client
         self._tool_registry = tool_registry if tool_registry is not None else ToolRegistry()
@@ -208,7 +208,7 @@ class Agent:
 
                 start_ns = time.monotonic_ns()
                 response = await self._llm_client.chat(messages=messages, tools=tools, listener=listener)
-                elapsed_ns = time.monotonic_ns() - start_ns
+                _elapsed = time.monotonic_ns() - start_ns  # reserved for telemetry
 
                 self._budget.record_tokens(response.input_tokens, response.output_tokens, response.cached_input_tokens)
                 self._memory_manager.record_token_usage(response.input_tokens, response.output_tokens, response.cached_input_tokens)
@@ -224,7 +224,7 @@ class Agent:
                     self._budget.record_tool_calls(response.tool_calls)
 
                     tool_results = await self._tool_registry.execute_tools(response.tool_calls)
-                    for tc, output in zip(response.tool_calls, tool_results.outputs):
+                    for tc, output in zip(response.tool_calls, tool_results.outputs, strict=False):
                         tool_msg = Message.tool(tc.id, output.content)
                         self._conversation_history.append(tool_msg)
                         self._memory_manager.add_tool_result(tc.name, output.content)
@@ -275,7 +275,7 @@ class Agent:
                 self._conversation_history[i] = msg.without_image_content()
 
     def _store_explicit_browser_memory_hint(self, text: str) -> None:
-        from paicli_py.memory.explicit_memory_hints import is_explicit_remember, extract_fact_from_remember
+        from paicli_py.memory.explicit_memory_hints import extract_fact_from_remember, is_explicit_remember
         if is_explicit_remember(text):
             fact = extract_fact_from_remember(text)
             if fact:
@@ -296,7 +296,7 @@ class Agent:
     def _push_status(self) -> None:
         renderer = self._get_renderer()
         try:
-            from paicli_py.render.protocol import StatusInfo
+            from paicli_py.render.status import StatusInfo
             status = StatusInfo(
                 model=f"{self._llm_client.provider_name}/{self._llm_client.model_name}",
                 total_tokens=self._budget.total_input_tokens + self._budget.total_output_tokens,

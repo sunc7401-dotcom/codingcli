@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from paicli_py.runtime.task.manager import DurableTaskManager
-from paicli_py.runtime.task.status import TaskStatus
 from paicli_py.runtime.task.task import DurableTask
 
 

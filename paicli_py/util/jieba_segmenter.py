@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import sys
-from io import StringIO
-
 
 def get_segmenter():
     """获取 jieba 分词器实例（抑制字典加载噪声，与 Java 一致）。"""

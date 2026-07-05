@@ -20,7 +20,10 @@ class TuiBootstrap:
     def launch() -> None:
         """启动 TUI 模式。"""
         try:
-            from textual.app import App
-            print("🚀 启动 PaiCLI TUI 模式")
+            import importlib.util
+            if importlib.util.find_spec("textual"):
+                print("🚀 启动 PaiCLI TUI 模式")
+            else:
+                raise ImportError
         except ImportError:
             print("⚠️ Textual 未安装，使用内联模式")

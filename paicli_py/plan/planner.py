@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from paicli_py.llm.client import LlmClient
-    from paicli_py.plan.execution_plan import ExecutionPlan
 
 
 class Planner:

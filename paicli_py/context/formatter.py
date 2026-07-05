@@ -47,7 +47,7 @@ def estimated_cost_cny(llm_client: LlmClient | None, input_tokens: int, output_t
 
     input_cost = (input_tokens / 1_000_000) * input_price
     output_cost = (output_tokens / 1_000_000) * output_price
-    cached_cost = (cached_input_tokens / 1_000_000) * cached_price
+    _cached_cost = (cached_input_tokens / 1_000_000) * cached_price
     total = input_cost + output_cost
 
     if total < 0.01:

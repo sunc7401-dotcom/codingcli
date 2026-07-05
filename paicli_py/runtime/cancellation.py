@@ -9,9 +9,8 @@ import asyncio
 from contextvars import ContextVar
 from typing import Any
 
-
 # Per-task cancellation context (similar to Java's thread-local CancellationContext)
-_current_token: ContextVar["CancellationToken | None"] = ContextVar("cancellation_token", default=None)
+_current_token: ContextVar[CancellationToken | None] = ContextVar("cancellation_token", default=None)
 
 
 class CancellationToken:
@@ -41,7 +40,7 @@ class CancellationToken:
         try:
             await asyncio.wait_for(self._event.wait(), timeout=timeout)
             return True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
     def __repr__(self) -> str:

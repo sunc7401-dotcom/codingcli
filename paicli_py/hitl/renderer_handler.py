@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from paicli_py.hitl.approval_policy import ApprovalPolicy
 from paicli_py.hitl.approval_request import ApprovalRequest
-from paicli_py.hitl.approval_result import ApprovalDecision, ApprovalResult
+from paicli_py.hitl.approval_result import ApprovalResult
 
 if TYPE_CHECKING:
     from paicli_py.render.protocol import Renderer

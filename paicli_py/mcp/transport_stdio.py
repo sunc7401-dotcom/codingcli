@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Callable, Coroutine
+from collections.abc import Callable, Coroutine
 
 from loguru import logger
 
@@ -51,7 +51,7 @@ class StdioTransport:
                 self._process.stdin.close()
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=5)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self._process.kill()
                 await self._process.wait()
 

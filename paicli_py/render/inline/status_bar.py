@@ -12,9 +12,8 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import ClassVar
 
-from paicli_py.render.protocol import StatusInfo
+from paicli_py.render.status import StatusInfo
 
 # 上下文用量条宽度
 CONTEXT_BAR_WIDTH = 8

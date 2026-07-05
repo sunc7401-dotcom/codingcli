@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -20,7 +18,6 @@ from paicli_py.cli.parser import CommandType, parse
 from paicli_py.config.config import PaiCliConfig
 from paicli_py.llm.factory import create_client, create_client_from_config
 from paicli_py.render.factory import RendererFactory
-
 
 # ═══════════════════════════════════════════════════════════
 # 启动画面
@@ -96,39 +93,47 @@ def _handle_command(command, state: dict[str, Any]) -> bool:
     agent = state.get("agent")
     config = state.get("config")
     memory = state.get("memory_manager")
-    tools = state.get("tool_registry")
+    _tools = state.get("tool_registry")
     mcp = state.get("mcp_manager")
     skills = state.get("skill_registry")
     skill_st = state.get("skill_state")
     snap = state.get("snapshot_service")
     hitl = state.get("hitl_handler")
-    renderer = state.get("renderer")
+    _renderer = state.get("renderer")
 
     # ── 基础 ──
     if ct == CommandType.EXIT:
-        print("再见！"); return False
+        print("再见！")
+        return False
     elif ct == CommandType.CANCEL:
-        print("已取消当前操作"); return True
+        print("已取消当前操作")
+        return True
     elif ct == CommandType.CLEAR:
-        if agent: agent.clear_history()
-        if memory: memory.clear_short_term()
-        print("✅ 已清空"); return True
+        if agent:
+            agent.clear_history()
+        if memory:
+            memory.clear_short_term()
+        print("✅ 已清空")
+        return True
     elif ct == CommandType.COMPACT:
         if agent:
             result = agent.compact_history_now()
             print(f"✅ 压缩完成: {result.before_messages} → {result.after_messages} 条消息")
         else:
-            print("⚠️ Agent 未初始化"); return True
+            print("⚠️ Agent 未初始化")
+        return True
     elif ct == CommandType.HISTORY_CLEAR:
         state["history_clear"] = True
-        print("✅ 输入历史已清空（下次启动生效）"); return True
+        print("✅ 输入历史已清空（下次启动生效）")
+        return True
 
     # ── 模型/模式 ──
     elif ct == CommandType.SWITCH_MODEL:
         if payload:
             new_client = create_client(payload, config)
             if new_client:
-                if agent: agent.set_llm_client(new_client)
+                if agent:
+                    agent.set_llm_client(new_client)
                 state["llm_client"] = new_client
                 print(f"✅ 已切换到: {new_client.provider_name}/{new_client.model_name}")
             else:
@@ -141,50 +146,78 @@ def _handle_command(command, state: dict[str, Any]) -> bool:
         if agent:
             state["plan_agent"] = PlanExecuteAgent(agent)
             state["mode"] = "plan"
-            print("✅ 已切换到 Plan-and-Execute 模式"); return True
+            print("✅ 已切换到 Plan-and-Execute 模式")
+        return True
     elif ct == CommandType.SWITCH_TEAM:
         state["mode"] = "team"
-        print("✅ 已切换到 Multi-Agent 团队模式"); return True
+        print("✅ 已切换到 Multi-Agent 团队模式")
+        return True
     elif ct == CommandType.SWITCH_HITL:
         if hitl:
-            if payload == "on": hitl.enable(); print("✅ HITL 已开启")
-            elif payload == "off": hitl.disable(); print("✅ HITL 已关闭")
-            else: print(f"HITL: {'开启' if hitl.is_enabled() else '关闭'}"); return True
+            if payload == "on":
+                hitl.enable()
+                print("✅ HITL 已开启")
+            elif payload == "off":
+                hitl.disable()
+                print("✅ HITL 已关闭")
+            else:
+                print(f"HITL: {'开启' if hitl.is_enabled() else '关闭'}")
+        return True
 
     # ── 记忆 ──
     elif ct == CommandType.MEMORY_STATUS:
-        if memory: print(memory.get_system_status()); return True
+        if memory:
+            print(memory.get_system_status())
+        return True
     elif ct == CommandType.MEMORY_CLEAR:
-        if memory: memory.clear_long_term(); print("✅ 已清空"); return True
+        if memory:
+            memory.clear_long_term()
+            print("✅ 已清空")
+        return True
     elif ct == CommandType.MEMORY_LIST:
         if memory:
-            for e in memory.list_long_term(): print(f"  [{e.id[:8]}] {e.content[:100]}")
-            if not memory.list_long_term(): print("(空)"); return True
+            for e in memory.list_long_term():
+                print(f"  [{e.id[:8]}] {e.content[:100]}")
+            if not memory.list_long_term():
+                print("(空)")
+        return True
     elif ct == CommandType.MEMORY_DELETE:
         if memory and payload.strip():
             ok = memory.delete_long_term(payload.strip())
-            print(f"{'✅ 已删除' if ok else '❌ 未找到'}"); return True
+            print(f"{'✅ 已删除' if ok else '❌ 未找到'}")
+        return True
     elif ct == CommandType.MEMORY_SEARCH:
         if memory and payload.strip():
             for e in memory.search_long_term(payload.strip(), 10):
-                print(f"  [{e.id[:8]}] {e.content[:120]}"); return True
+                print(f"  [{e.id[:8]}] {e.content[:120]}")
+        return True
     elif ct == CommandType.MEMORY_SAVE:
-        if memory and payload: memory.store_fact(payload); print("✅ 已保存"); return True
+        if memory and payload:
+            memory.store_fact(payload)
+            print("✅ 已保存")
+        return True
 
     # ── 代码索引 ──
     elif ct == CommandType.INDEX_CODE:
-        print("🔄 索引中（RAG 需要先运行 /index）..."); return True
+        print("🔄 索引中（RAG 需要先运行 /index）...")
+        return True
     elif ct == CommandType.SEARCH_CODE:
-        if payload: print(f"搜索: {payload}（需先 /index）"); return True
+        if payload:
+            print(f"搜索: {payload}（需先 /index）")
+        return True
     elif ct == CommandType.GRAPH_QUERY:
-        if payload: print(f"关系图: {payload}"); return True
+        if payload:
+            print(f"关系图: {payload}")
+        return True
 
     # ── 上下文/策略/配置 ──
     elif ct == CommandType.CONTEXT_STATUS:
-        if memory: print(memory.context_profile.summary()); return True
+        if memory:
+            print(memory.context_profile.summary())
+        return True
     elif ct == CommandType.POLICY_STATUS:
-        from paicli_py.policy.command_guard import check_command
-        print("策略: PathGuard + CommandGuard + AuditLog 已启用"); return True
+        print("策略: PathGuard + CommandGuard + AuditLog 已启用")
+        return True
     elif ct == CommandType.CONFIG:
         if payload:
             parts = payload.split(maxsplit=1)
@@ -198,42 +231,67 @@ def _handle_command(command, state: dict[str, Any]) -> bool:
         log = AuditLog()
         n = int(payload) if payload and payload.isdigit() else 20
         for entry in log.read_recent(n):
-            print(f"  {entry.get('timestamp','')} [{entry.get('tool','')}] {entry.get('outcome','')} {entry.get('reason','')}")
+            ts = entry.get('timestamp', '')
+            tool = entry.get('tool', '')
+            outcome = entry.get('outcome', '')
+            reason = entry.get('reason', '')
+            print(f"  {ts} [{tool}] {outcome} {reason}")
         return True
 
     # ── 快照 ──
     elif ct == CommandType.SNAPSHOT:
         if snap:
             if payload == "clean":
-                snap.clean(); print("✅ 快照已清理")
+                snap.clean()
+                print("✅ 快照已清理")
             else:
-                print(snap.status()); return True
+                print(snap.status())
+        return True
     elif ct == CommandType.RESTORE_SNAPSHOT:
         if snap:
             offset = int(payload) if payload and payload.lstrip("-").isdigit() else 1
             result = asyncio.get_event_loop().run_until_complete(snap.restore(offset))
-            if result.success: print(f"✅ 已恢复到第{offset}轮前快照")
-            else: print(f"❌ {result.error}"); return True
+            if result.success:
+                print(f"✅ 已恢复到第{offset}轮前快照")
+            else:
+                print(f"❌ {result.error}")
+        return True
 
     # ── MCP ──
     elif ct == CommandType.MCP_LIST:
         if mcp:
             for s in mcp.list_servers():
                 icon = "🟢" if s.is_ready else "🔴"
-                print(f"  {icon} {s.name} [{s.status.value}] {len(s.tools)} 工具"); return True
+                print(f"  {icon} {s.name} [{s.status.value}] {len(s.tools)} 工具")
+        return True
     elif ct == CommandType.MCP_RESTART:
-        if mcp and payload.strip(): asyncio.create_task(mcp.restart(payload.strip())); print(f"🔄 重启中: {payload.strip()}"); return True
+        if mcp and payload.strip():
+            asyncio.create_task(mcp.restart(payload.strip()))
+            print(f"🔄 重启中: {payload.strip()}")
+        return True
     elif ct == CommandType.MCP_LOGS:
         if mcp and payload.strip():
-            for line in mcp.get_logs(payload.strip())[-20:]: print(f"  {line}"); return True
+            for line in mcp.get_logs(payload.strip())[-20:]:
+                print(f"  {line}")
+        return True
     elif ct == CommandType.MCP_DISABLE:
-        if mcp and payload.strip(): asyncio.create_task(mcp.disable(payload.strip())); print(f"✅ 已禁用: {payload.strip()}"); return True
+        if mcp and payload.strip():
+            asyncio.create_task(mcp.disable(payload.strip()))
+            print(f"✅ 已禁用: {payload.strip()}")
+        return True
     elif ct == CommandType.MCP_ENABLE:
-        if mcp and payload.strip(): asyncio.create_task(mcp.enable(payload.strip())); print(f"✅ 已启用: {payload.strip()}"); return True
+        if mcp and payload.strip():
+            asyncio.create_task(mcp.enable(payload.strip()))
+            print(f"✅ 已启用: {payload.strip()}")
+        return True
     elif ct == CommandType.MCP_RESOURCES:
-        if mcp and payload.strip(): print(f"资源: {payload.strip()}"); return True
+        if mcp and payload.strip():
+            print(f"资源: {payload.strip()}")
+        return True
     elif ct == CommandType.MCP_PROMPTS:
-        if mcp and payload.strip(): print(f"提示词: {payload.strip()}"); return True
+        if mcp and payload.strip():
+            print(f"提示词: {payload.strip()}")
+        return True
 
     # ── 浏览器 ──
     elif ct == CommandType.BROWSER:
@@ -241,36 +299,53 @@ def _handle_command(command, state: dict[str, Any]) -> bool:
         if browser:
             status = asyncio.get_event_loop().run_until_complete(browser.status())
             print(status)
-        else: print("浏览器未配置"); return True
+        else:
+            print("浏览器未配置")
+        return True
 
     # ── 微信 ──
     elif ct == CommandType.WECHAT:
-        print("微信 iLink 通道 (需独立启动: python -m paicli_py.wechat)"); return True
+        print("微信 iLink 通道 (需独立启动: python -m paicli_py.wechat)")
+        return True
 
     # ── 后台任务 ──
     elif ct == CommandType.TASK:
         tm = state.get("task_manager")
         if tm:
             from paicli_py.runtime.task.formatter import handle
-            print(handle(tm, payload)); return True
+            print(handle(tm, payload))
+        return True
 
     # ── 技能 ──
     elif ct == CommandType.SKILL_LIST:
         if skills:
             for s in skills.list_all():
                 status = "✅" if skill_st.is_enabled(s.name) else "❌"
-                print(f"  {status} {s.name} — {s.description[:80]}"); return True
+                print(f"  {status} {s.name} — {s.description[:80]}")
+        return True
     elif ct == CommandType.SKILL_SHOW:
         if skills and payload.strip():
             s = skills.get(payload.strip())
-            if s: print(f"{s.name}\n{s.description}\nv{s.version}\n---\n{s.body[:2000]}")
-            else: print(f"未找到: {payload.strip()}"); return True
+            if s:
+                print(f"{s.name}\n{s.description}\nv{s.version}\n---\n{s.body[:2000]}")
+            else:
+                print(f"未找到: {payload.strip()}")
+        return True
     elif ct == CommandType.SKILL_ON:
-        if skill_st and payload.strip(): skill_st.enable(payload.strip()); print(f"✅ 已启用: {payload.strip()}"); return True
+        if skill_st and payload.strip():
+            skill_st.enable(payload.strip())
+            print(f"✅ 已启用: {payload.strip()}")
+        return True
     elif ct == CommandType.SKILL_OFF:
-        if skill_st and payload.strip(): skill_st.disable(payload.strip()); print(f"✅ 已禁用: {payload.strip()}"); return True
+        if skill_st and payload.strip():
+            skill_st.disable(payload.strip())
+            print(f"✅ 已禁用: {payload.strip()}")
+        return True
     elif ct == CommandType.SKILL_RELOAD:
-        if skills: skills.reload(); print(f"✅ 已重载 ({len(skills)} 个)"); return True
+        if skills:
+            skills.reload()
+            print(f"✅ 已重载 ({len(skills)} 个)")
+        return True
 
     # ── 导出 ──
     elif ct == CommandType.EXPORT:
@@ -283,14 +358,16 @@ def _handle_command(command, state: dict[str, Any]) -> bool:
             for msg in agent.conversation_history:
                 lines.append(f"## {msg.role.upper()}\n{msg.content}\n")
             path.write_text("\n".join(lines), encoding="utf-8")
-            print(f"✅ 已导出: {path}"); return True
+            print(f"✅ 已导出: {path}")
+        return True
 
     # ── 项目记忆 ──
     elif ct == CommandType.INIT_PROJECT_MEMORY:
         from paicli_py.cli.project_memory_initializer import ProjectMemoryInitializer
         force = "--force" in (payload or "")
         result = ProjectMemoryInitializer.generate(force=force)
-        print(result); return True
+        print(result)
+        return True
 
     # ── 未知/帮助 ──
     elif ct == CommandType.UNKNOWN_COMMAND:
@@ -317,8 +394,8 @@ async def _repl_loop(state: dict[str, Any]) -> None:
 
     try:
         from prompt_toolkit import PromptSession
-        from prompt_toolkit.history import FileHistory
         from prompt_toolkit.completion import Completer, Completion
+        from prompt_toolkit.history import FileHistory
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.styles import Style
 
@@ -339,9 +416,8 @@ async def _repl_loop(state: dict[str, Any]) -> None:
         class _SlashHighlighter:
             def lex_document(self, document):
                 def get_line(lineno):
-                    from prompt_toolkit.lexers import Lexer
                     line = document.lines[lineno]
-                    parts = [("class:slash-command" if c == "/" else "class:mention" if c == "@" else "", ch) for ch in line]
+                    parts = [("class:slash-command" if ch == "/" else "class:mention" if ch == "@" else "", ch) for ch in line]
                     return parts
                 return get_line
 
@@ -438,10 +514,10 @@ def main() -> None:
         return
 
     # 3. 子系统
-    from paicli_py.memory.manager import MemoryManager
-    from paicli_py.tool.registry import ToolRegistry
     from paicli_py.agent.agent import Agent
     from paicli_py.hitl.terminal_handler import TerminalHitlHandler
+    from paicli_py.memory.manager import MemoryManager
+    from paicli_py.tool.registry import ToolRegistry
 
     memory_manager = MemoryManager(llm_client)
     tool_registry = ToolRegistry()
@@ -460,9 +536,9 @@ def main() -> None:
     # 技能
     skill_registry = None; skill_state = None; skill_buffer = None
     try:
+        from paicli_py.skill.context_buffer import SkillContextBuffer
         from paicli_py.skill.registry import SkillRegistry
         from paicli_py.skill.state_store import SkillStateStore
-        from paicli_py.skill.context_buffer import SkillContextBuffer
         skill_registry = SkillRegistry()
         skill_registry.reload()
         skill_state = SkillStateStore()

@@ -7,7 +7,7 @@ import os
 import re
 from pathlib import Path
 
-from paicli_py.mcp.mcp_config_file import McpConfigFile, McpServerConfig
+from paicli_py.mcp.mcp_config_file import McpServerConfig
 
 _VAR_RE = re.compile(r"\$\{([^}]+)\}")
 

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from paicli_py.hitl.approval_policy import ApprovalPolicy
-
 
 BOX_INNER_WIDTH = 58
 FIELD_WIDTH = 50

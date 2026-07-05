@@ -7,7 +7,7 @@ import threading
 
 from paicli_py.hitl.approval_policy import ApprovalPolicy
 from paicli_py.hitl.approval_request import ApprovalRequest
-from paicli_py.hitl.approval_result import ApprovalDecision, ApprovalResult
+from paicli_py.hitl.approval_result import ApprovalResult
 
 
 class TerminalHitlHandler:

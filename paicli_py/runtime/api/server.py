@@ -8,15 +8,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import secrets
 import sqlite3
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlparse
 
 

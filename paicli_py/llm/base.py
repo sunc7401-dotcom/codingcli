@@ -11,7 +11,6 @@ from typing import Any
 
 import httpx
 
-from paicli_py.llm.client import LlmClient
 from paicli_py.llm.models import ChatResponse, ContentPart, Message, StreamListener, ToolCall, _Function
 
 
@@ -148,7 +147,7 @@ class AbstractOpenAiCompatibleClient:
         try:
             if response.status_code != 200:
                 error_body = response.text
-                raise IOError(f"API请求失败: {response.status_code} - {error_body}")
+                raise OSError(f"API请求失败: {response.status_code} - {error_body}")
 
             role = "assistant"
             content_parts: list[str] = []
@@ -175,7 +174,7 @@ class AbstractOpenAiCompatibleClient:
                 # Check for error
                 error = root.get("error")
                 if error:
-                    raise IOError(f"API请求失败: {self._format_streaming_error(error)}")
+                    raise OSError(f"API请求失败: {self._format_streaming_error(error)}")
 
                 # Usage
                 usage = root.get("usage")
@@ -219,7 +218,7 @@ class AbstractOpenAiCompatibleClient:
             tool_calls = self._build_tool_calls(accumulators)
 
             if not content and not reasoning and not tool_calls:
-                raise IOError("API返回空内容，请检查 provider/model 配置或该模型是否支持当前请求参数")
+                raise OSError("API返回空内容，请检查 provider/model 配置或该模型是否支持当前请求参数")
 
             return ChatResponse(
                 role=role,

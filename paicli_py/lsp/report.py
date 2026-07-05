@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
-from paicli_py.lsp.diagnostic import LspDiagnostic
+from dataclasses import dataclass
 
 
 @dataclass
@@ -16,7 +14,7 @@ class LspDiagnosticReport:
     def is_empty(self) -> bool:
         return not self.prompt_text and not self.display_text
 
-    EMPTY: "LspDiagnosticReport" = None  # type: ignore
+    EMPTY: LspDiagnosticReport = None  # type: ignore
 
 
 LspDiagnosticReport.EMPTY = LspDiagnosticReport()

@@ -6,7 +6,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-
 DEFAULT_PATTERNS = [
     "*.bank.*", "*.alipay.com*", "*.paypal.com*", "*.stripe.com*",
     "github.com/settings/*", "*.feishu.cn/admin*", "*.larkoffice.com/admin*",

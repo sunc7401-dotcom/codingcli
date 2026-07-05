@@ -6,12 +6,10 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
-
 
 # 搜索时排除的目录
 EXCLUDED_DIRS: set[str] = {

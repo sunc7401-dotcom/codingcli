@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from loguru import logger
 
 from paicli_py.snapshot.config import SnapshotConfig
-from paicli_py.snapshot.phase import SnapshotPhase
 from paicli_py.snapshot.restore_result import RestoreResult
 from paicli_py.snapshot.side_git import SideGitManager
 from paicli_py.snapshot.turn_snapshot import TurnSnapshot
@@ -92,7 +92,7 @@ class SnapshotService:
         if self._last_async_task:
             try:
                 await asyncio.wait_for(self._last_async_task, timeout=60)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("等待后置快照超时 (60s)")
 
     @property

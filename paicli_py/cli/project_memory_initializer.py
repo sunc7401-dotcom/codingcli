@@ -77,9 +77,7 @@ class ProjectMemoryInitializer:
             info["build_tool"] = "Maven"
 
         # 测试框架
-        if list(base.rglob("test_*.py")) or list(base.rglob("*_test.py")):
-            info["test_framework"] = "pytest"
-        elif (base / "tests").is_dir():
+        if list(base.rglob("test_*.py")) or list(base.rglob("*_test.py")) or (base / "tests").is_dir():
             info["test_framework"] = "pytest"
 
         return info

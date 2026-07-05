@@ -44,7 +44,7 @@ class McpResourceCache:
         """获取所有未过期的资源。"""
         now = time.time()
         result: list[McpResourceDescriptor] = []
-        for server_name, cached_list in self._cache.items():
+        for _server_name, cached_list in self._cache.items():
             for cr in cached_list:
                 if now - cr.cached_at < self._ttl:
                     result.append(cr.descriptor)

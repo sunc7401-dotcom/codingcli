@@ -5,12 +5,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from loguru import logger
 
-from paicli_py.rag.analyzer import CodeAnalyzer, CodeRelation
+from paicli_py.rag.analyzer import CodeAnalyzer
 from paicli_py.rag.chunker import CodeChunker
 from paicli_py.rag.embedding import EmbeddingClient
 from paicli_py.rag.vector_store import VectorStore
@@ -70,7 +70,7 @@ class CodeIndex:
         logger.info(f"索引项目 {base.name}: {total} 个文件")
 
         relation_count = 0
-        for i, file_path in enumerate(files):
+        for _i, file_path in enumerate(files):
             try:
                 # 分析代码关系
                 relations = CodeAnalyzer.analyze(file_path)

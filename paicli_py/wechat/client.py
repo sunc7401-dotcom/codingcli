@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import json
-import time
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from paicli_py.wechat.login_result import WechatLoginResult
-from paicli_py.wechat.message import WechatMediaItem, WechatMessage
+from paicli_py.wechat.message import WechatMessage
 
 
 @dataclass

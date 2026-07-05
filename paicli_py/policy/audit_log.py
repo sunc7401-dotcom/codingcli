@@ -15,11 +15,10 @@ import os
 import re
 import sys
 import threading
-from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, ClassVar
-
+from typing import Any
 
 # 审批者常量
 APPROVER_HITL = "hitl"
@@ -55,7 +54,7 @@ class AuditEntry:
     @classmethod
     def allow(cls, tool: str, args: str, duration_ms: int, metadata: dict | None = None) -> AuditEntry:
         return cls(
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             tool=tool,
             args=_truncate(args),
             outcome=OUTCOME_ALLOW,
@@ -68,7 +67,7 @@ class AuditEntry:
     @classmethod
     def allow_by_mention(cls, tool: str, args: str, duration_ms: int) -> AuditEntry:
         return cls(
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             tool=tool,
             args=_truncate(args),
             outcome=OUTCOME_ALLOW,
@@ -80,7 +79,7 @@ class AuditEntry:
     @classmethod
     def deny_by_hitl(cls, tool: str, args: str, reason: str, duration_ms: int) -> AuditEntry:
         return cls(
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             tool=tool,
             args=_truncate(args),
             outcome=OUTCOME_DENY,
@@ -92,7 +91,7 @@ class AuditEntry:
     @classmethod
     def deny_by_policy(cls, tool: str, args: str, reason: str, duration_ms: int, metadata: dict | None = None) -> AuditEntry:
         return cls(
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             tool=tool,
             args=_truncate(args),
             outcome=OUTCOME_DENY,
@@ -105,7 +104,7 @@ class AuditEntry:
     @classmethod
     def error(cls, tool: str, args: str, reason: str, duration_ms: int, metadata: dict | None = None) -> AuditEntry:
         return cls(
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             tool=tool,
             args=_truncate(args),
             outcome=OUTCOME_ERROR,

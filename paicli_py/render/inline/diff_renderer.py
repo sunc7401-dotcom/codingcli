@@ -11,7 +11,6 @@ from __future__ import annotations
 from enum import Enum
 from typing import NamedTuple
 
-
 # ANSI 颜色
 GREEN = "\033[32m"
 RED = "\033[31m"
@@ -156,9 +155,7 @@ class InlineDiffRenderer:
         current: list[int] = []
         for idx in sorted_indices:
             if 0 <= idx < len(ops):
-                if not current:
-                    current.append(idx)
-                elif idx <= current[-1] + (2 * CONTEXT_LINES + 1):
+                if not current or idx <= current[-1] + (2 * CONTEXT_LINES + 1):
                     current.append(idx)
                 else:
                     groups.append(current)

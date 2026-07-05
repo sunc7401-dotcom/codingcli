@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -73,8 +72,6 @@ class AgentOrchestrator:
         steps: list[str] = []
         for line in text.splitlines():
             line = line.strip()
-            if line.upper().startswith("[STEP]") or line.startswith("[STEP]"):
-                steps.append(line)
-            elif line and (line[0].isdigit() and (". " in line or "、" in line)):
+            if line.upper().startswith("[STEP]") or line.startswith("[STEP]") or line and (line[0].isdigit() and (". " in line or "、" in line)):
                 steps.append(line)
         return steps

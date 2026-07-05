@@ -9,9 +9,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import uuid
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from loguru import logger
 
@@ -66,9 +66,9 @@ class JsonRpcClient:
 
         try:
             return await asyncio.wait_for(future, timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError as err:
             self._pending.pop(request_id, None)
-            raise JsonRpcError(-32000, f"请求超时 ({timeout}s): {method}")
+            raise JsonRpcError(-32000, f"请求超时 ({timeout}s): {method}") from err
 
     def send_notification(self, method: str, params: dict | None = None) -> None:
         """发送 JSON-RPC 通知（无响应）。"""

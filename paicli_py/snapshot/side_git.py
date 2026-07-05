@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import time
 from pathlib import Path
@@ -11,7 +10,6 @@ from paicli_py.snapshot.config import SnapshotConfig
 from paicli_py.snapshot.phase import SnapshotPhase
 from paicli_py.snapshot.restore_result import RestoreResult
 from paicli_py.snapshot.turn_snapshot import TurnSnapshot
-
 
 SNAPSHOT_IDENT = "PaiCLI Snapshot <snapshot@paicli.local>"
 
@@ -68,7 +66,7 @@ class SideGitManager:
         if self._repo is None:
             return None
         try:
-            from dulwich.objects import Blob, Tree, Commit
+            from dulwich.objects import Blob, Commit, Tree
             tree = Tree()
             for file_path in self._iter_project_files():
                 try:

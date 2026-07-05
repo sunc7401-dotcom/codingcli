@@ -7,7 +7,8 @@
 
 from __future__ import annotations
 
-from paicli_py.render.protocol import Renderer, StatusInfo
+from paicli_py.render.protocol import Renderer
+from paicli_py.render.status import StatusInfo
 
 
 class LanternaRenderer(Renderer):
@@ -27,8 +28,11 @@ class LanternaRenderer(Renderer):
 
     def start(self) -> None:
         try:
-            from textual.app import App
-            print("PaiCLI v16.1.0 (Python) — TUI 模式 (Textual)")
+            import importlib.util
+            if importlib.util.find_spec("textual"):
+                print("PaiCLI v16.1.0 (Python) — TUI 模式 (Textual)")
+            else:
+                raise ImportError
         except ImportError:
             print("⚠️ Textual 未安装，降级为内联渲染模式")
             from paicli_py.render.inline_renderer import InlineRenderer

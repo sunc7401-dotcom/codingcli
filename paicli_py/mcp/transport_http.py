@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Callable, Coroutine
+from collections.abc import Callable, Coroutine
 
 import httpx
 from loguru import logger

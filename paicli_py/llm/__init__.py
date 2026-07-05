@@ -4,8 +4,8 @@
 所有客户端均通过 OpenAI 兼容的 chat/completions 端点进行 SSE 流式调用。
 """
 
-from paicli_py.llm.client import LlmClient
 from paicli_py.llm.base import AbstractOpenAiCompatibleClient
+from paicli_py.llm.client import LlmClient
 from paicli_py.llm.factory import create_client, create_client_from_config, normalize_provider
 from paicli_py.llm.trace import LlmTraceLogger
 

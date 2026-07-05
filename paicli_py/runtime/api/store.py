@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 
@@ -35,7 +35,7 @@ class RuntimeThreadStore:
 
     def create_thread(self) -> str:
         tid = "thread_" + uuid.uuid4().hex[:12]
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self._lock:
             self._conn.execute("INSERT INTO runtime_threads VALUES (?, ?)", [tid, now])
             self._conn.execute("INSERT INTO runtime_events (thread_id, type, data, created_at) VALUES (?, ?, ?, ?)", [tid, "thread.created", "{}", now])
@@ -46,7 +46,7 @@ class RuntimeThreadStore:
         return self._conn.execute("SELECT 1 FROM runtime_threads WHERE id = ?", [thread_id]).fetchone() is not None
 
     def append_event(self, thread_id: str, event_type: str, data: str) -> int:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self._lock:
             cur = self._conn.execute("INSERT INTO runtime_events (thread_id, type, data, created_at) VALUES (?, ?, ?, ?)", [thread_id, event_type, data, now])
             self._conn.commit()

@@ -8,7 +8,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
 MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024  # 2MB
 EXCLUDED_DIRS = {".git", ".paicli", "target", "node_modules", "dist", "build", "coverage", ".idea", ".gradle"}
@@ -18,7 +17,7 @@ EXCLUDED_DIRS = {".git", ".paicli", "target", "node_modules", "dist", "build", "
 class GrepMatch:
     file_path: str
     line_number: int
-    context: list["ContextLine"]
+    context: list[ContextLine]
 
 
 @dataclass

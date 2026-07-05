@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -169,10 +169,11 @@ class McpServerManager:
         for tool in tools:
             namespaced = tool.namespaced_name
 
-            async def _executor(params: dict, _client=self._clients.get(server_name), _name=tool.name) -> str:
-                if _client is None:
+            async def _executor(params: dict, _client=None, _name=tool.name) -> str:
+                client = _client if _client is not None else self._clients.get(server_name)
+                if client is None:
                     return f"MCP 服务器 {server_name} 未连接"
-                result = await _client.call_tool(_name, params)
+                result = await client.call_tool(_name, params)
                 return result.text_content()
 
             self._tool_registry.register(

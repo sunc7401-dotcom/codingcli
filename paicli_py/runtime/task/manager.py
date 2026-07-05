@@ -11,14 +11,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import sqlite3
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from paicli_py.runtime.task.status import TaskStatus
 from paicli_py.runtime.task.task import DurableTask
@@ -63,7 +62,7 @@ class DurableTaskManager:
         """关闭管理器——停止所有工作线程并关闭数据库。"""
         self._running = False
         # 中断所有运行中的工作线程
-        for tid, thread in list(self._running_tasks.items()):
+        for tid, _thread in list(self._running_tasks.items()):
             try:
                 # Python 线程无法强制中断，标记为 CANCELED
                 now = time.time()

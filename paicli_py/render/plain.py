@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from paicli_py.render.protocol import Renderer, StatusInfo
+from paicli_py.render.protocol import Renderer
+from paicli_py.render.status import StatusInfo
 
 
 class PlainRenderer(Renderer):

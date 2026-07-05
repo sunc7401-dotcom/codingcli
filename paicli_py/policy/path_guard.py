@@ -58,7 +58,6 @@ class PathGuard:
 
         raw = Path(input_path)
         resolved = raw if raw.is_absolute() else (self._root_path / raw)
-        resolved = resolved.normalize()
 
         # 解析符号链接（包括不存在的路径）
         real_resolved = self._resolve_real_path(resolved)
@@ -66,10 +65,10 @@ class PathGuard:
         # 检查是否在项目根内
         try:
             real_resolved.relative_to(self._root_path)
-        except ValueError:
+        except ValueError as err:
             raise PolicyException(
                 f"路径越界: {input_path} 不在项目根 {self._root_path} 之内"
-            )
+            ) from err
 
         return real_resolved
 

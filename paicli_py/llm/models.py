@@ -7,9 +7,8 @@ Mirrors the records defined in ``com.paicli.llm.LlmClient``:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
-
 
 # ──────────────────────────────────────────────
 # ContentPart

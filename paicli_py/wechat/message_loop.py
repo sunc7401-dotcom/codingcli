@@ -41,7 +41,7 @@ class WechatMessageLoop:
                     if update.message and update.message.message_id not in self._seen_message_ids:
                         self._seen_message_ids.add(update.message.message_id)
                         await self._message_queue.put(update.message)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             except Exception as e:
                 logger.warning(f"微信消息轮询异常: {e}")

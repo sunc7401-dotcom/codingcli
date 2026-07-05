@@ -11,7 +11,8 @@
 
 from __future__ import annotations
 
-from paicli_py.render.protocol import Renderer, StatusInfo
+from paicli_py.render.protocol import Renderer
+from paicli_py.render.status import StatusInfo
 
 
 class InlineRenderer(Renderer):
@@ -42,7 +43,7 @@ class InlineRenderer(Renderer):
             self._console.print(f"[yellow]🔧 {name}[/yellow]")
 
     def append_tool_result(self, tool_name: str, result: str) -> None:
-        preview = result[:300] + "..." if len(result) > 300 else result
+        _preview = result[:300] + "..." if len(result) > 300 else result
         self._console.print(f"[dim]📋 [{tool_name}][/dim]")
 
     def append_diff(self, file_path: str, diff_text: str) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from paicli_py.render.protocol import Renderer, StatusInfo
+from paicli_py.render.status import StatusInfo
 
 
 class WechatRenderer:

@@ -91,7 +91,7 @@ class CodeChunker:
 
         # 方法级
         for m in re.finditer(r"(?:public|private|protected|static|\s)+([\w<>,\[\]\s]+)\s+(\w+)\s*\([^)]*\)\s*(?:\{|throws)", text):
-            return_type = m.group(1).strip()
+            _return_type = m.group(1).strip()
             method_name = m.group(2)
             if method_name in ("if","for","while","switch","return","new","try","catch"):
                 continue

@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
 
 import httpx
 from loguru import logger
-
 
 # ────────────────────────────────────────────────
 # StdioTransport
@@ -85,7 +84,7 @@ class StdioTransport:
             # 等待进程退出（最多 5 秒）
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=5)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self._process.kill()
                 await self._process.wait()
 

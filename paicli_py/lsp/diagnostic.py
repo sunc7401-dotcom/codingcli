@@ -57,7 +57,7 @@ class LspDiagnosticReport:
             files_with_warnings=self.files_with_warnings + other.files_with_warnings,
         )
 
-    EMPTY: "LspDiagnosticReport" = None  # type: ignore[assignment]
+    EMPTY: LspDiagnosticReport = None  # type: ignore[assignment]
 
 
 LspDiagnosticReport.EMPTY = LspDiagnosticReport()

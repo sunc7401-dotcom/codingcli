@@ -10,10 +10,10 @@
 
 from __future__ import annotations
 
-import time
+import json
 from typing import Any
 
-from paicli_py.hitl.handler import ApprovalPolicy, ApprovalRequest, ApprovalResult, HitlHandler, ApprovalDecision
+from paicli_py.hitl.handler import ApprovalDecision, ApprovalPolicy, ApprovalRequest, HitlHandler
 from paicli_py.tool.registry import ToolRegistry
 
 
@@ -33,16 +33,15 @@ class HitlToolRegistry(ToolRegistry):
 
     async def _execute_single(self, tool_call: Any):
         """重写：在工具执行前插入 HITL 审批检查。"""
-        import json
 
         # 获取工具名和参数
         if hasattr(tool_call, "name"):
             tool_name = tool_call.name
-            tool_id = tool_call.id
+            _tool_id = tool_call.id  # reserved for future use
             args_str = tool_call.arguments
         else:
             tool_name = tool_call.get("function", {}).get("name", "")
-            tool_id = tool_call.get("id", "")
+            _tool_id = tool_call.get("id", "")
             args_str = tool_call.get("function", {}).get("arguments", "{}")
 
         # 不需要审批或 HITL 禁用 → 直接执行
@@ -109,9 +108,8 @@ class HitlToolRegistry(ToolRegistry):
             params = json.loads(args_str) if isinstance(args_str, str) else args_str
         except json.JSONDecodeError:
             from paicli_py.tool.output import ToolOutput
-            return ToolOutput(tool_name=tool_name, content=f"参数解析失败", is_error=True)
+            return ToolOutput(tool_name=tool_name, content="参数解析失败", is_error=True)
 
-        import json
         try:
             content = await tool.executor(params)
             from paicli_py.tool.output import ToolOutput

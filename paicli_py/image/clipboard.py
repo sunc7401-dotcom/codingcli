@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 
 class ClipboardImage:
     """从系统剪贴板抓取图片。

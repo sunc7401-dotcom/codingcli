@@ -13,14 +13,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from loguru import logger
-
+from paicli_py.context.profile import ContextProfile
+from paicli_py.lsp.manager import LspManager
+from paicli_py.policy.audit_log import AuditLog
+from paicli_py.policy.path_guard import PathGuard
+from paicli_py.snapshot.service import SnapshotService
 from paicli_py.tool.output import ToolExecutionResult, ToolOutput
 
 # ── 常量（与 Java 完全一致）────────────────────────────
@@ -56,12 +58,9 @@ class ToolRegistry:
         self._tool_batch_timeout = DEFAULT_TOOL_BATCH_TIMEOUT
 
         # ── 横切关注点字段（与 Java 一致）────────────────
-        from paicli_py.policy.path_guard import PathGuard
         self._path_guard = PathGuard(self._project_path)
-        from paicli_py.policy.audit_log import AuditLog
         self._audit_log = AuditLog()
         self._context_profile = None  # ContextProfile
-        from paicli_py.context.profile import ContextProfile
         self._context_profile = ContextProfile.custom(128_000, 57_600)
 
         # 外部依赖（懒加载或通过 setter 注入）
@@ -75,9 +74,7 @@ class ToolRegistry:
         self._skill_registry = None
         self._skill_context_buffer = None
         self._write_file_observer: Callable[[str, list[str | None]], None] = lambda p, ba: None
-        from paicli_py.lsp.manager import LspManager
         self._lsp_manager = LspManager(self._project_path)
-        from paicli_py.snapshot.service import SnapshotService
         self._snapshot_service = SnapshotService(self._project_path)
         self._custom_snapshot_service = False
         self._current_provider = ""
@@ -396,7 +393,7 @@ class ToolRegistry:
             if len(output) > MAX_COMMAND_OUTPUT_CHARS:
                 output = output[:MAX_COMMAND_OUTPUT_CHARS] + f"\n...(已截断，原 {len(output)} 字符)"
             return output or "(无输出)"
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return f"命令超时 ({DEFAULT_COMMAND_TIMEOUT}s)"
         except Exception as e:
             return f"命令执行失败: {e}"

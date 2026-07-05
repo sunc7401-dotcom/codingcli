@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 _SKIP_KEYS = {"$ref", "$schema", "anyOf", "oneOf", "allOf", "not"}
 
 

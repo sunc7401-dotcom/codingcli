@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import ipaddress
-import re
 import socket
 import time
 from urllib.parse import urlparse
