@@ -271,14 +271,27 @@ class AbstractOpenAiCompatibleClient:
         if tools:
             tools_list: list[dict] = []
             for tool in tools:
-                tools_list.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool.get("name", tool.name if hasattr(tool, "name") else ""),
-                        "description": tool.get("description", tool.description if hasattr(tool, "description") else ""),
-                        "parameters": tool.get("parameters", tool.parameters if hasattr(tool, "parameters") else {}),
-                    },
-                })
+                # Support both flat format {name, description, parameters}
+                # and OpenAI-wrapped format {type: "function", function: {name, description, parameters}}
+                if "function" in tool and isinstance(tool["function"], dict):
+                    func = tool["function"]
+                    tools_list.append({
+                        "type": "function",
+                        "function": {
+                            "name": func.get("name", ""),
+                            "description": func.get("description", ""),
+                            "parameters": func.get("parameters", {}),
+                        },
+                    })
+                else:
+                    tools_list.append({
+                        "type": "function",
+                        "function": {
+                            "name": tool.get("name", ""),
+                            "description": tool.get("description", ""),
+                            "parameters": tool.get("parameters", {}),
+                        },
+                    })
             body["tools"] = tools_list
 
         return body

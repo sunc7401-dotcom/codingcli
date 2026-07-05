@@ -364,7 +364,7 @@ async def _repl_loop(state: dict[str, Any]) -> None:
             style=Style.from_dict({"prompt": "ansicyan bold", "slash-command": "ansicyan", "mention": "ansiblue"}),
         )
         use_pt = True
-    except ImportError:
+    except (ImportError, Exception):
         use_pt = False
 
     while True:
@@ -430,14 +430,12 @@ def main() -> None:
 
     # 1. 配置
     config = PaiCliConfig.load()
-    if not config.providers:
-        print("⚠️  未配置 LLM 提供商。请设置 GLM_API_KEY 等环境变量。")
-        return
 
-    # 2. LLM
+    # 2. LLM（自动扫描 config.json → 环境变量 → .env）
     llm_client = create_client_from_config(config)
     if not llm_client:
-        print("❌ 无法连接 LLM。"); return
+        print("⚠️  未配置 LLM 提供商。请设置 DEEPSEEK_API_KEY / GLM_API_KEY 等环境变量或创建 .env 文件。")
+        return
 
     # 3. 子系统
     from paicli_py.memory.manager import MemoryManager
@@ -504,7 +502,7 @@ def main() -> None:
     project_memory = ProjectMemoryLoader().load_for_prompt()
     system_prompt = PromptAssembler().assemble(project_memory)
 
-    agent = Agent(llm_client=llm_client, tool_registry=tool_registry, memory_manager=memory_manager)
+    agent = Agent(llm_client=llm_client, tool_registry=tool_registry)
     agent.set_system_prompt(system_prompt)
     agent.set_renderer(renderer)
     agent.set_skill_registry(skill_registry)

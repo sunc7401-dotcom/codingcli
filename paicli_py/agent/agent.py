@@ -137,6 +137,13 @@ class Agent:
                 pass
         return "\n\n".join(parts)
 
+    def set_system_prompt(self, prompt: str) -> None:
+        """Set the system prompt directly, replacing the existing one."""
+        if self._conversation_history and self._conversation_history[0].role == "system":
+            self._conversation_history[0] = Message.system(prompt)
+        else:
+            self._conversation_history.insert(0, Message.system(prompt))
+
     def update_system_prompt_with_memory(self, memory_context: str) -> None:
         new_system = self._build_system_prompt(memory_context)
         if self._conversation_history and self._conversation_history[0].role == "system":
@@ -146,7 +153,7 @@ class Agent:
 
     # ── 主循环 run() ──────────────────────────────────────
 
-    def run(self, user_input: str) -> str:
+    async def run(self, user_input: str) -> str:
         logger.info(f"ReAct run started: inputLength={len(user_input) if user_input else 0}")
 
         self._prune_historical_images()
@@ -200,7 +207,7 @@ class Agent:
                 listener = self._create_stream_listener() if self._get_renderer() else None
 
                 start_ns = time.monotonic_ns()
-                response = self._llm_client.chat(messages=messages, tools=tools, listener=listener)
+                response = await self._llm_client.chat(messages=messages, tools=tools, listener=listener)
                 elapsed_ns = time.monotonic_ns() - start_ns
 
                 self._budget.record_tokens(response.input_tokens, response.output_tokens, response.cached_input_tokens)
@@ -216,7 +223,7 @@ class Agent:
                 if response.has_tool_calls():
                     self._budget.record_tool_calls(response.tool_calls)
 
-                    tool_results = self._tool_registry.execute_tools(response.tool_calls)
+                    tool_results = await self._tool_registry.execute_tools(response.tool_calls)
                     for tc, output in zip(response.tool_calls, tool_results.outputs):
                         tool_msg = Message.tool(tc.id, output.content)
                         self._conversation_history.append(tool_msg)
