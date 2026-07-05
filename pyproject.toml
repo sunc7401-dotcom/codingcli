@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "paicli-py"
 version = "16.1.0"
-description = "PaiCLI - A terminal-native Agent IDE (Python port)"
+description = "PaiCLI - 终端 Agent IDE (Python 移植版)"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
@@ -57,6 +57,16 @@ paicli = "paicli_py.cli.main:main"
 
 [tool.setuptools.packages.find]
 include = ["paicli_py*"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.25.0",
+    "pytest-httpserver>=1.1.0",
+    "pytest-mock>=3.14.0",
+    "mypy>=1.14.0",
+    "ruff>=0.9.0",
+]
 
 [tool.mypy]
 strict = true
