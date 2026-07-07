@@ -97,7 +97,7 @@ uv run paicli --help
 ## 架构
 
 ```
-paicli_py/
+suncli_py/
 ├── agent/        Agent 核心（ReAct / Plan-Execute / Multi-Agent 编排）
 ├── cli/          命令行入口（解析器 / 补全 / 高亮 / 历史）
 ├── config/       配置管理（PaiCliConfig + .env）
@@ -134,7 +134,7 @@ paicli_py/
 uv sync --group dev    # 安装开发依赖
 uv run pytest          # 运行测试
 uv run ruff check .    # 代码检查
-uv run mypy paicli_py  # 类型检查
+uv run mypy suncli_py  # 类型检查
 ```
 
 ---

@@ -53,10 +53,10 @@ dev = [
 ]
 
 [project.scripts]
-paicli = "paicli_py.cli.main:main"
+paicli = "suncli_py.cli.main:main"
 
 [tool.setuptools.packages.find]
-include = ["paicli_py*"]
+include = ["suncli_py*"]
 
 [tool.uv]
 dev-dependencies = [
