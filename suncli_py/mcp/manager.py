@@ -104,7 +104,7 @@ class McpServerManager:
 
     # ── 重启 / 控制 ────────────────────────────────────────
 
-    async def restart(self, name: str) -> None:
+    async def restart(self, name: str) -> str:
         """重启指定服务器。"""
         await self._stop_server(name)
         # 重新加载配置
@@ -112,16 +112,24 @@ class McpServerManager:
         cfg = configs.get(name)
         if cfg:
             await self._start_server(name, cfg)
+            server = self._servers.get(name)
+            if server and server.is_ready:
+                return f"MCP 服务器已重启: {name}"
+            detail = server.error_message if server else ""
+            return f"MCP 服务器重启失败: {name} {detail}".strip()
+        return f"未找到 MCP 服务器配置: {name}"
 
-    async def disable(self, name: str) -> None:
+    async def disable(self, name: str) -> str:
         """禁用并停止服务器。"""
         await self._stop_server(name)
         if name in self._servers:
             self._servers[name].status = McpServerStatus.DISABLED
+            return f"MCP 服务器已禁用: {name}"
+        return f"未找到 MCP 服务器: {name}"
 
-    async def enable(self, name: str) -> None:
+    async def enable(self, name: str) -> str:
         """启用服务器（重新启动）。"""
-        await self.restart(name)
+        return await self.restart(name)
 
     async def _stop_server(self, name: str) -> None:
         """停止单个服务器。"""
@@ -158,6 +166,40 @@ class McpServerManager:
         if client and hasattr(client._transport, "stderr_lines"):
             return client._transport.stderr_lines
         return []
+
+    async def resources(self, name: str) -> str:
+        client = self._clients.get(name)
+        if not client:
+            return f"MCP 服务器未连接: {name}"
+        try:
+            resources = await client.list_resources()
+        except Exception as exc:
+            return f"读取 MCP resources 失败: {exc}"
+        if not resources:
+            return f"MCP 服务器 {name} 没有 resources"
+        lines = [f"MCP resources: {name}"]
+        for item in resources:
+            uri = item.get("uri", "")
+            title = item.get("name") or item.get("title") or uri
+            lines.append(f"  - {title}  {uri}")
+        return "\n".join(lines)
+
+    async def prompts(self, name: str) -> str:
+        client = self._clients.get(name)
+        if not client:
+            return f"MCP 服务器未连接: {name}"
+        try:
+            prompts = await client.list_prompts()
+        except Exception as exc:
+            return f"读取 MCP prompts 失败: {exc}"
+        if not prompts:
+            return f"MCP 服务器 {name} 没有 prompts"
+        lines = [f"MCP prompts: {name}"]
+        for item in prompts:
+            prompt_name = item.get("name", "")
+            desc = item.get("description", "")
+            lines.append(f"  - {prompt_name}  {desc}".rstrip())
+        return "\n".join(lines)
 
     # ── 内部 ────────────────────────────────────────────────
 

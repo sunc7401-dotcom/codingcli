@@ -82,7 +82,7 @@ def _print_help() -> None:
 # 命令处理器（完整 43 条命令）
 # ═══════════════════════════════════════════════════════════
 
-def _handle_command(command, state: dict[str, Any]) -> bool:
+async def _handle_command(command, state: dict[str, Any]) -> bool:
     """
     Returns:
         True = 继续, False = 退出
@@ -199,15 +199,69 @@ def _handle_command(command, state: dict[str, Any]) -> bool:
 
     # ── 代码索引 ──
     elif ct == CommandType.INDEX_CODE:
-        print("🔄 索引中（RAG 需要先运行 /index）...")
+        index_path = payload.strip() or "."
+        abs_path = str(Path(index_path).resolve())
+        print(f"🔄 正在索引: {abs_path}")
+        from suncli_py.rag.index import CodeIndex
+
+        def _progress(done: int, total: int) -> None:
+            if total and (done == total or done % 10 == 0):
+                print(f"   进度: {done}/{total}")
+
+        indexer = CodeIndex()
+        try:
+            stats = await indexer.index_project(abs_path, _progress)
+        finally:
+            indexer.close()
+        if _tools:
+            _tools.set_project_path(abs_path)
+        if memory:
+            memory.set_project_path(abs_path)
+        print(f"✅ 索引完成: {stats.get('chunks', 0)} 个代码块, {stats.get('relations', 0)} 条关系")
         return True
     elif ct == CommandType.SEARCH_CODE:
-        if payload:
-            print(f"搜索: {payload}（需先 /index）")
+        query = payload.strip()
+        if not query:
+            print("❌ 请提供检索关键词，例如 /search 用户登录实现")
+            return True
+        from suncli_py.rag.formatter import format_for_cli
+        from suncli_py.rag.retriever import CodeRetriever
+
+        project_path = _tools.project_path if _tools else str(Path.cwd())
+        retriever = CodeRetriever(project_path)
+        try:
+            stats = retriever.get_stats()
+            if stats.get("chunks", 0) == 0:
+                print("⚠️ 代码库尚未索引，请先使用 /index 命令")
+                return True
+            results = await retriever.hybrid_search(query, 5)
+            print(format_for_cli(query, results) if results else "📭 未找到相关代码")
+        finally:
+            retriever.close()
         return True
     elif ct == CommandType.GRAPH_QUERY:
-        if payload:
-            print(f"关系图: {payload}")
+        name = payload.strip()
+        if not name:
+            print("❌ 请提供类名或符号名，例如 /graph Main")
+            return True
+        from suncli_py.rag.retriever import CodeRetriever
+
+        project_path = _tools.project_path if _tools else str(Path.cwd())
+        retriever = CodeRetriever(project_path)
+        try:
+            stats = retriever.get_stats()
+            if stats.get("chunks", 0) == 0:
+                print("⚠️ 代码库尚未索引，请先使用 /index 命令")
+                return True
+            relations = retriever.get_relation_graph(name)
+            if not relations:
+                print("📭 未找到相关关系")
+            else:
+                print(f"📊 找到 {len(relations)} 条关系")
+                for rel in relations[:50]:
+                    print(f"  {rel.get('from_name')} --{rel.get('relation_type')}--> {rel.get('to_name')}")
+        finally:
+            retriever.close()
         return True
 
     # ── 上下文/策略/配置 ──
@@ -250,7 +304,7 @@ def _handle_command(command, state: dict[str, Any]) -> bool:
     elif ct == CommandType.RESTORE_SNAPSHOT:
         if snap:
             offset = int(payload) if payload and payload.lstrip("-").isdigit() else 1
-            result = asyncio.get_event_loop().run_until_complete(snap.restore(offset))
+            result = await snap.restore(offset)
             if result.success:
                 print(f"✅ 已恢复到第{offset}轮前快照")
             else:
@@ -266,8 +320,7 @@ def _handle_command(command, state: dict[str, Any]) -> bool:
         return True
     elif ct == CommandType.MCP_RESTART:
         if mcp and payload.strip():
-            asyncio.create_task(mcp.restart(payload.strip()))
-            print(f"🔄 重启中: {payload.strip()}")
+            print(await mcp.restart(payload.strip()))
         return True
     elif ct == CommandType.MCP_LOGS:
         if mcp and payload.strip():
@@ -276,29 +329,32 @@ def _handle_command(command, state: dict[str, Any]) -> bool:
         return True
     elif ct == CommandType.MCP_DISABLE:
         if mcp and payload.strip():
-            asyncio.create_task(mcp.disable(payload.strip()))
-            print(f"✅ 已禁用: {payload.strip()}")
+            print(await mcp.disable(payload.strip()))
         return True
     elif ct == CommandType.MCP_ENABLE:
         if mcp and payload.strip():
-            asyncio.create_task(mcp.enable(payload.strip()))
-            print(f"✅ 已启用: {payload.strip()}")
+            print(await mcp.enable(payload.strip()))
         return True
     elif ct == CommandType.MCP_RESOURCES:
         if mcp and payload.strip():
-            print(f"资源: {payload.strip()}")
+            print(await mcp.resources(payload.strip()))
         return True
     elif ct == CommandType.MCP_PROMPTS:
         if mcp and payload.strip():
-            print(f"提示词: {payload.strip()}")
+            print(await mcp.prompts(payload.strip()))
         return True
 
     # ── 浏览器 ──
     elif ct == CommandType.BROWSER:
         browser = state.get("browser_connector")
         if browser:
-            status = asyncio.get_event_loop().run_until_complete(browser.status())
-            print(status)
+            action = (payload or "status").strip().lower()
+            if action == "connect":
+                print(await browser.connect_default())
+            elif action == "disconnect":
+                print(await browser.disconnect())
+            else:
+                print(await browser.status())
         else:
             print("浏览器未配置")
         return True
@@ -454,7 +510,7 @@ async def _repl_loop(state: dict[str, Any]) -> None:
 
         command = parse(user_input)
         if command.type != CommandType.NONE:
-            if not _handle_command(command, state):
+            if not await _handle_command(command, state):
                 break
             continue
 
@@ -521,8 +577,19 @@ def main() -> None:
 
     memory_manager = MemoryManager(llm_client)
     tool_registry = ToolRegistry()
+    project_root = str(Path.cwd().resolve())
+    tool_registry.set_project_path(project_root)
+    memory_manager.set_project_path(project_root)
     renderer = RendererFactory.create()
     hitl_handler = TerminalHitlHandler(enabled=True)
+
+    try:
+        from suncli_py.web.fetcher import WebFetcher
+        from suncli_py.web.search_factory import SearchProviderFactory
+        tool_registry.set_search_provider(SearchProviderFactory.create())
+        tool_registry.set_web_fetcher(WebFetcher())
+    except Exception as e:
+        logger.warning(f"Web 工具初始化失败: {e}")
 
     # MCP
     mcp_manager = None
@@ -543,6 +610,8 @@ def main() -> None:
         skill_registry.reload()
         skill_state = SkillStateStore()
         skill_buffer = SkillContextBuffer()
+        tool_registry.set_skill_registry(skill_registry)
+        tool_registry.set_skill_context_buffer(skill_buffer)
     except Exception as e:
         logger.warning(f"技能失败: {e}")
 
@@ -559,6 +628,7 @@ def main() -> None:
     try:
         from suncli_py.browser.connector import BrowserConnector
         browser_connector = BrowserConnector()
+        tool_registry.set_browser_connector(browser_connector)
     except Exception:
         pass
 

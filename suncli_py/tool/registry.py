@@ -120,6 +120,12 @@ class ToolRegistry:
     def set_browser_connector(self, connector) -> None:
         self._browser_connector = connector
 
+    def set_search_provider(self, provider) -> None:
+        self._search_provider = provider
+
+    def set_web_fetcher(self, fetcher) -> None:
+        self._web_fetcher = fetcher
+
     def set_memory_saver(self, saver: Callable[[str], None] | None) -> None:
         if saver:
             self._memory_saver = lambda fact, scope: saver(fact)
@@ -280,8 +286,8 @@ class ToolRegistry:
         self.register("execute_command", f"执行 Shell 命令。超时 {DEFAULT_COMMAND_TIMEOUT}s。",
             {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]},
             self._execute_command)
-        self.register("create_project", "创建新项目（需审批）。",
-            {"type": "object", "properties": {"path": {"type": "string"}, "template": {"type": "string"}}, "required": ["path"]},
+        self.register("create_project", "创建新项目结构。",
+            {"type": "object", "properties": {"name": {"type": "string"}, "type": {"type": "string"}, "path": {"type": "string"}, "template": {"type": "string"}}, "required": ["name", "type"]},
             self._create_project)
 
     def _register_web_tools(self) -> None:
@@ -399,8 +405,46 @@ class ToolRegistry:
             return f"命令执行失败: {e}"
 
     async def _create_project(self, params: dict) -> str:
-        path = params["path"]
-        return f"create_project: {path}（需配置模板系统）"
+        name = params.get("name") or params.get("path")
+        project_type = (params.get("type") or params.get("template") or "python").lower()
+        if not name:
+            return "创建项目失败: name 不能为空"
+
+        try:
+            project_root = Path(self._path_guard.resolve_safe(str(name)))
+            project_root.mkdir(parents=True, exist_ok=True)
+            project_name = project_root.name
+            package_name = project_name.replace("-", "_")
+
+            if project_type == "java":
+                (project_root / "src" / "main" / "java").mkdir(parents=True, exist_ok=True)
+                (project_root / "src" / "main" / "resources").mkdir(parents=True, exist_ok=True)
+                (project_root / "pom.xml").write_text(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                    "<project>\n"
+                    "    <modelVersion>4.0.0</modelVersion>\n"
+                    "    <groupId>com.example</groupId>\n"
+                    f"    <artifactId>{project_name}</artifactId>\n"
+                    "    <version>1.0</version>\n"
+                    "</project>\n",
+                    encoding="utf-8",
+                )
+            elif project_type == "python":
+                (project_root / package_name).mkdir(parents=True, exist_ok=True)
+                (project_root / package_name / "__init__.py").write_text("", encoding="utf-8")
+                (project_root / "main.py").write_text("# Main entry point\n", encoding="utf-8")
+                (project_root / "requirements.txt").write_text("# Dependencies\n", encoding="utf-8")
+            elif project_type == "node":
+                (project_root / "package.json").write_text(
+                    json.dumps({"name": project_name, "version": "1.0.0"}, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            else:
+                return f"创建项目失败: 不支持的类型 {project_type}，可选 java/python/node"
+
+            return f"项目已创建: {project_root} (类型: {project_type})"
+        except Exception as e:
+            return f"创建项目失败: {e}"
 
     async def _web_search(self, params: dict) -> str:
         query = params["query"]
@@ -471,7 +515,21 @@ class ToolRegistry:
 
     async def _search_code(self, params: dict) -> str:
         query = params["query"]
-        return f"RAG 代码搜索: {query}（需先运行 /index 建立索引）"
+        top_k = max(1, min(int(params.get("top_k", params.get("k", 5))), 30))
+        from suncli_py.rag.formatter import format_for_tool
+        from suncli_py.rag.retriever import CodeRetriever
+
+        retriever = CodeRetriever(self._project_path)
+        try:
+            stats = retriever.get_stats()
+            if stats.get("chunks", 0) == 0:
+                return "代码库尚未索引，请先使用 /index 命令索引当前项目。"
+            results = await retriever.hybrid_search(query, top_k)
+            if not results:
+                return "未找到与查询相关的代码。"
+            return format_for_tool(query, results)
+        finally:
+            retriever.close()
 
     def _run_post_edit_lsp_hook(self, display_path: str, edited_file: Path) -> None:
         try:

@@ -80,7 +80,11 @@ class PathGuard:
         仍能识别出"路径中段是个软链且指向外部"的越界情况。
         """
         existing = target
+        missing_parts: list[str] = []
         while existing is not None and not existing.exists():
+            missing_parts.append(existing.name)
+            if existing.parent == existing:
+                break
             existing = existing.parent
 
         if existing is None:
@@ -88,10 +92,9 @@ class PathGuard:
 
         try:
             real_existing = existing.resolve()
-            remainder = existing.relative_to(target) if target.is_relative_to(existing) else Path(".")
-            # Compute relative path from existing to target
-            remainder = Path(str(target)[len(str(existing)):].lstrip("/\\"))
-            result = (real_existing / remainder).resolve()
-            return result
+            result = real_existing
+            for part in reversed(missing_parts):
+                result = result / part
+            return result.absolute()
         except OSError:
             return target.absolute()
