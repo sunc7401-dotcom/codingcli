@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from suncli_py.refactor_agent.java_ast import JavaAstError, JavaParserAnalyzer
 from suncli_py.refactor_agent.models import JavaContext, RefactorIssue
 
 IGNORED_DIRS = {".git", ".paicli", "target", "build", ".gradle", "node_modules"}
@@ -62,6 +63,10 @@ class JavaContextCollector:
         if not issue.symbol:
             return []
 
+        symbol_callers = self._find_direct_callers_with_symbols(issue)
+        if symbol_callers:
+            return symbol_callers
+
         callers: list[str] = []
         needle = f"{issue.symbol}("
         for path in sorted(self.root.rglob("*.java")):
@@ -74,6 +79,29 @@ class JavaContextCollector:
             text = path.read_text(encoding="utf-8", errors="replace")
             if needle in text:
                 callers.append(relative_text)
+            if len(callers) >= 20:
+                break
+        return callers
+
+    def _find_direct_callers_with_symbols(self, issue: RefactorIssue) -> list[str]:
+        java_files = [
+            path
+            for path in sorted(self.root.rglob("*.java"))
+            if not any(part in IGNORED_DIRS for part in path.relative_to(self.root).parts)
+        ]
+        try:
+            analyses = JavaParserAnalyzer(self.root).analyze_files(java_files)
+        except JavaAstError:
+            return []
+
+        callers: list[str] = []
+        for analysis in analyses:
+            if analysis.relative_path == issue.file_path:
+                continue
+            for call in analysis.method_calls:
+                if call.name == issue.symbol and call.symbol_resolved:
+                    callers.append(analysis.relative_path)
+                    break
             if len(callers) >= 20:
                 break
         return callers

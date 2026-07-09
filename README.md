@@ -2,7 +2,7 @@
 
 本项目是一个面向 Java Maven 仓库的本地 Coding Agent，核心业务是对代码进行结构化检查、坏味道识别、重构计划生成、补丁应用、验证、回滚和报告输出。
 
-它不是让大模型直接重写代码，而是把 LLM 放进受控的软件工程流程中：JavaParser AST 负责代码结构事实提取和补丁后校验，LLM 负责解释问题、增强重构计划和生成受控 edit operations，最终由用户确认、AST 校验、Maven 测试、覆盖感知和快照回滚决定变更能否落地。
+它不是让大模型直接重写代码，而是把 LLM 放进受控的软件工程流程中：JavaParser AST + Symbol Solver 负责代码结构事实提取、类型解析、调用解析和补丁后校验，LLM 负责解释问题、增强重构计划和生成受控 edit operations，最终由用户确认、AST 校验、Maven 测试、覆盖感知和快照回滚决定变更能否落地。
 
 ## 项目定位
 
@@ -20,7 +20,7 @@
 ```text
 Java Maven 仓库
   -> 项目检测
-  -> JavaParser AST 解析
+  -> JavaParser AST + Symbol Solver 解析
   -> 坏味道扫描
   -> LLM 问题解释
   -> 生成小步重构计划
@@ -39,11 +39,12 @@ Java Maven 仓库
 
 系统会扫描当前 Java Maven Git 仓库，识别项目结构、源码目录、测试目录、Maven 环境和 Git 工作区状态。
 
-代码结构识别优先使用真实 Java AST：
+代码结构识别优先使用真实 Java AST 和 Symbol Solver：
 
 - 类、接口、枚举、record
 - 构造器、方法、private 成员
 - 方法签名、修饰符、源码起止行
+- 方法调用、字段访问、声明类型和 resolved signature
 - 方法长度、分支数量、嵌套深度等指标
 
 当 JavaParser 不可用时，系统会降级到文本启发式扫描，并在结果中提示降级风险。
@@ -57,9 +58,10 @@ MVP 支持以下代码坏味道：
 - Complex Condition：复杂布尔表达式或深层嵌套条件。
 - Duplicate Code：重复代码片段。
 - Dead Code：未被引用的 private 方法。
+- Feature Envy：方法对外部类型的方法调用或字段访问明显多于本类成员。
 - Unclear Naming：含义不清晰的变量、方法或类名。
 
-每个 issue 会包含文件路径、代码位置、风险等级、证据指标、影响说明、推荐重构方式和是否适合自动重构。
+每个 issue 会包含文件路径、代码位置、风险等级、证据指标、影响说明、推荐重构方式和是否适合自动重构。Dead Code 和 Feature Envy 会优先使用 Symbol Solver 的调用解析、字段引用解析和类型解析结果，降低纯文本规则误判。
 
 ### LLM Agent 能力
 
@@ -225,7 +227,7 @@ tests/test_refactor_agent_*.py
 
 ## 项目亮点
 
-- 使用 JavaParser 做真实 Java AST 解析，不只依赖正则扫描。
+- 使用 JavaParser + Symbol Solver 做真实 Java AST、类型、方法调用和字段引用解析，不只依赖正则扫描。
 - 采用“规则筛选 + LLM 解释/计划增强”的 Agent 工作流。
 - LLM 只生成候选解释、计划和 edit operations，不能直接绕过安全边界。
 - patch 后重新 AST 解析，防止 public API 被意外修改。
@@ -243,7 +245,7 @@ mvn -q -f suncli_py/refactor_agent/java_ast_helper/pom.xml compile
 
 ## 适合写入简历的描述
 
-设计并实现面向 Java Maven 仓库的代码检查与自动化安全重构 Agent，结合 JavaParser AST 静态分析和 LLM 语义理解，识别 Long Method、Large Class、Duplicate Code、Dead Code 等代码坏味道，并生成可验证的小步重构计划。系统支持 LLM 结构化计划增强、受控 patch 生成、AST Patch Validator、Maven 测试验证、覆盖感知、任务级快照和失败回滚，降低 AI 自动修改代码引入回归缺陷的风险。
+设计并实现面向 Java Maven 仓库的代码检查与自动化安全重构 Agent，结合 JavaParser AST、Symbol Solver 静态语义分析和 LLM 语义理解，识别 Long Method、Large Class、Duplicate Code、Dead Code、Feature Envy 等代码坏味道，并生成可验证的小步重构计划。系统支持 LLM 结构化计划增强、受控 patch 生成、AST Patch Validator、Maven 测试验证、覆盖感知、任务级快照和失败回滚，降低 AI 自动修改代码引入回归缺陷的风险。
 
 ## 许可证
 

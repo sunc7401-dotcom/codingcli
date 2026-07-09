@@ -63,6 +63,8 @@ def _goal(issue: RefactorIssue) -> str:
             return "定位重复代码并规划共享逻辑提取。"
         case SmellType.DEAD_CODE:
             return f"移除未使用的 private 代码 {target}。"
+        case SmellType.FEATURE_ENVY:
+            return f"为方法 {target} 生成 Move Method / Extract Method 重构计划，降低对外部类型的过度依赖。"
         case SmellType.UNCLEAR_NAMING:
             return f"改善命名 {target}，让代码意图更清晰。"
 
@@ -88,6 +90,12 @@ def _expected_changes(issue: RefactorIssue) -> list[str]:
             return [
                 "为复杂布尔表达式引入解释性变量或小方法。",
                 "保持条件判断语义不变。",
+            ]
+        case RefactoringType.MOVE_METHOD:
+            return [
+                "分析目标方法依赖的外部类型和本类状态。",
+                "MVP 默认只生成 Move Method / Extract Method 计划，不自动跨类移动代码。",
+                "保留当前 public API，必要时通过委托方法维持兼容。",
             ]
         case RefactoringType.REPLACE_DUPLICATE_LOGIC:
             return [

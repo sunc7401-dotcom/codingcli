@@ -22,8 +22,36 @@ class AstMethod:
     start_line: int
     end_line: int
     signature: str
+    declaring_type: str
+    resolved_signature: str
+    symbol_resolved: bool
     is_private: bool
     is_static: bool
+
+
+@dataclass(frozen=True)
+class AstMethodCall:
+    name: str
+    start_line: int
+    end_line: int
+    scope: str
+    declaring_type: str
+    resolved_signature: str
+    return_type: str
+    symbol_resolved: bool
+    error: str
+
+
+@dataclass(frozen=True)
+class AstFieldAccess:
+    name: str
+    start_line: int
+    end_line: int
+    scope: str
+    declaring_type: str
+    type: str
+    symbol_resolved: bool
+    error: str
 
 
 @dataclass(frozen=True)
@@ -40,6 +68,8 @@ class AstFileAnalysis:
     relative_path: str
     methods: list[AstMethod]
     classes: list[AstClass]
+    method_calls: list[AstMethodCall]
+    field_accesses: list[AstFieldAccess]
 
 
 def _default_command_runner(command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -109,6 +139,9 @@ def _ast_file_from_dict(data: dict, root: Path) -> AstFileAnalysis:
                 start_line=int(item["start_line"]),
                 end_line=int(item["end_line"]),
                 signature=item.get("signature", ""),
+                declaring_type=item.get("declaring_type", ""),
+                resolved_signature=item.get("resolved_signature", ""),
+                symbol_resolved=bool(item.get("symbol_resolved", False)),
                 is_private=bool(item.get("is_private", False)),
                 is_static=bool(item.get("is_static", False)),
             )
@@ -122,6 +155,33 @@ def _ast_file_from_dict(data: dict, root: Path) -> AstFileAnalysis:
                 kind=item.get("kind", "class"),
             )
             for item in data.get("classes", [])
+        ],
+        method_calls=[
+            AstMethodCall(
+                name=item.get("name", ""),
+                start_line=int(item.get("start_line", 1)),
+                end_line=int(item.get("end_line", item.get("start_line", 1))),
+                scope=item.get("scope", ""),
+                declaring_type=item.get("declaring_type", ""),
+                resolved_signature=item.get("resolved_signature", ""),
+                return_type=item.get("return_type", ""),
+                symbol_resolved=bool(item.get("symbol_resolved", False)),
+                error=item.get("error", ""),
+            )
+            for item in data.get("method_calls", [])
+        ],
+        field_accesses=[
+            AstFieldAccess(
+                name=item.get("name", ""),
+                start_line=int(item.get("start_line", 1)),
+                end_line=int(item.get("end_line", item.get("start_line", 1))),
+                scope=item.get("scope", ""),
+                declaring_type=item.get("declaring_type", ""),
+                type=item.get("type", ""),
+                symbol_resolved=bool(item.get("symbol_resolved", False)),
+                error=item.get("error", ""),
+            )
+            for item in data.get("field_accesses", [])
         ],
     )
 

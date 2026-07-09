@@ -10,7 +10,13 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from suncli_py.refactor_agent.java_ast import AstFileAnalysis, JavaAstError, JavaParserAnalyzer
+from suncli_py.refactor_agent.java_ast import (
+    AstFieldAccess,
+    AstFileAnalysis,
+    AstMethodCall,
+    JavaAstError,
+    JavaParserAnalyzer,
+)
 from suncli_py.refactor_agent.models import (
     Evidence,
     RefactoringType,
@@ -34,8 +40,13 @@ class JavaMethod:
     end_line: int
     body_lines: list[str]
     signature: str
+    declaring_type: str
+    resolved_signature: str
+    symbol_resolved: bool
     is_private: bool
     is_static: bool
+    method_calls: list[AstMethodCall]
+    field_accesses: list[AstFieldAccess]
 
 
 @dataclass(frozen=True)
@@ -97,6 +108,7 @@ class JavaSmellScanner:
         issues.extend(self._scan_complex_conditions(analyses))
         issues.extend(self._scan_unclear_naming(analyses))
         issues.extend(self._scan_dead_code(analyses))
+        issues.extend(self._scan_feature_envy(analyses))
         issues.extend(self._scan_duplicate_code(analyses))
 
         sorted_issues = sorted(issues, key=lambda issue: (issue.file_path, issue.start_line, issue.type.value))
@@ -165,8 +177,21 @@ class JavaSmellScanner:
                 end_line=method.end_line,
                 body_lines=sanitized[method.start_line - 1 : method.end_line],
                 signature=method.signature,
+                declaring_type=method.declaring_type,
+                resolved_signature=method.resolved_signature,
+                symbol_resolved=method.symbol_resolved,
                 is_private=method.is_private,
                 is_static=method.is_static,
+                method_calls=[
+                    call
+                    for call in ast_analysis.method_calls
+                    if method.start_line <= call.start_line <= method.end_line
+                ],
+                field_accesses=[
+                    access
+                    for access in ast_analysis.field_accesses
+                    if method.start_line <= access.start_line <= method.end_line
+                ],
             )
             for method in ast_analysis.methods
         ]
@@ -402,13 +427,24 @@ class JavaSmellScanner:
     def _scan_dead_code(self, analyses: list[JavaFileAnalysis]) -> list[RefactorIssue]:
         source_text = "\n".join("\n".join(analysis.sanitized_lines) for analysis in analyses)
         name_counts = Counter(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", source_text))
+        resolved_calls = {
+            call.resolved_signature
+            for analysis in analyses
+            for method in analysis.methods
+            for call in method.method_calls
+            if call.symbol_resolved and call.resolved_signature
+        }
         issues: list[RefactorIssue] = []
         for analysis in analyses:
             for method in analysis.methods:
                 if not method.is_private or method.name in {"main"}:
                     continue
-                if name_counts[method.name] > 1:
+                has_symbol_data = bool(method.symbol_resolved and method.resolved_signature)
+                if has_symbol_data and method.resolved_signature in resolved_calls:
                     continue
+                if not has_symbol_data and name_counts[method.name] > 1:
+                    continue
+                source = "symbol-solver" if has_symbol_data else "identifier-count-fallback"
                 issues.append(
                     _issue(
                         SmellType.DEAD_CODE,
@@ -420,7 +456,11 @@ class JavaSmellScanner:
                         [
                             Evidence(
                                 "private 方法未发现其它引用。",
-                                {"identifier_occurrences": name_counts[method.name]},
+                                {
+                                    "identifier_occurrences": name_counts[method.name],
+                                    "source": source,
+                                    "resolved_signature": method.resolved_signature,
+                                },
                             )
                         ],
                         "无用 private 代码会增加阅读负担，也可能误导后续重构判断。",
@@ -429,6 +469,82 @@ class JavaSmellScanner:
                         auto_applicable=True,
                         risk_level=RiskLevel.LOW,
                         requires_review=False,
+                    )
+                )
+        return issues
+
+    def _scan_feature_envy(self, analyses: Iterable[JavaFileAnalysis]) -> list[RefactorIssue]:
+        issues: list[RefactorIssue] = []
+        for analysis in analyses:
+            for method in analysis.methods:
+                if method.is_private or not method.symbol_resolved or not method.declaring_type:
+                    continue
+                external_calls = [
+                    call
+                    for call in method.method_calls
+                    if call.symbol_resolved
+                    and call.declaring_type
+                    and not _same_or_nested_type(call.declaring_type, method.declaring_type)
+                    and not call.declaring_type.startswith("java.")
+                ]
+                external_fields = [
+                    access
+                    for access in method.field_accesses
+                    if access.symbol_resolved
+                    and access.declaring_type
+                    and not _same_or_nested_type(access.declaring_type, method.declaring_type)
+                    and not access.declaring_type.startswith("java.")
+                ]
+                local_calls = [
+                    call
+                    for call in method.method_calls
+                    if call.symbol_resolved and _same_or_nested_type(call.declaring_type, method.declaring_type)
+                ]
+                local_fields = [
+                    access
+                    for access in method.field_accesses
+                    if access.symbol_resolved and _same_or_nested_type(access.declaring_type, method.declaring_type)
+                ]
+                external_total = len(external_calls) + len(external_fields)
+                local_total = len(local_calls) + len(local_fields)
+                if external_total < 5 or external_total < max(local_total * 2, 3):
+                    continue
+
+                external_types = Counter(
+                    item.declaring_type for item in [*external_calls, *external_fields] if item.declaring_type
+                )
+                dominant_type, dominant_count = external_types.most_common(1)[0]
+                if dominant_count < 4:
+                    continue
+
+                issues.append(
+                    _issue(
+                        SmellType.FEATURE_ENVY,
+                        Severity.MEDIUM,
+                        analysis.relative_path,
+                        method.name,
+                        method.start_line,
+                        method.end_line,
+                        [
+                            Evidence(
+                                "方法访问外部类型成员明显多于本类成员。",
+                                {
+                                    "source": "javaparser-symbol-solver",
+                                    "declaring_type": method.declaring_type,
+                                    "dominant_external_type": dominant_type,
+                                    "external_member_uses": external_total,
+                                    "local_member_uses": local_total,
+                                    "external_method_calls": len(external_calls),
+                                    "external_field_accesses": len(external_fields),
+                                },
+                            )
+                        ],
+                        "Feature Envy 通常说明方法逻辑更依赖其它类型的数据或行为，可能导致职责放错位置。",
+                        "优先评估 Move Method、Extract Method 或把外部数据访问封装到目标类型内。",
+                        RefactoringType.MOVE_METHOD,
+                        auto_applicable=False,
+                        risk_level=RiskLevel.MEDIUM,
+                        requires_review=True,
                     )
                 )
         return issues
@@ -612,8 +728,13 @@ def _extract_methods(lines: list[str]) -> list[JavaMethod]:
                             end_line=end_index + 1,
                             body_lines=body_lines,
                             signature=signature,
+                            declaring_type="",
+                            resolved_signature="",
+                            symbol_resolved=False,
                             is_private=bool(re.search(r"\bprivate\b", signature)),
                             is_static=bool(re.search(r"\bstatic\b", signature)),
+                            method_calls=[],
+                            field_accesses=[],
                         )
                     )
                     pending_signature.clear()
@@ -728,6 +849,10 @@ def _normalize_duplicate_line(line: str) -> str:
     stripped = re.sub(r"\b\d+\b", "0", stripped)
     stripped = re.sub(r"\s+", " ", stripped)
     return stripped
+
+
+def _same_or_nested_type(candidate: str, owner: str) -> bool:
+    return bool(candidate and owner and (candidate == owner or candidate.startswith(owner + ".")))
 
 
 def _parse_cpd_output(output: str, root: Path) -> list[RefactorIssue]:

@@ -60,6 +60,7 @@ class SmellType(StrEnum):
     COMPLEX_CONDITION = "complex_condition"
     DUPLICATE_CODE = "duplicate_code"
     DEAD_CODE = "dead_code"
+    FEATURE_ENVY = "feature_envy"
     UNCLEAR_NAMING = "unclear_naming"
 
 
@@ -79,6 +80,7 @@ class RefactoringType(StrEnum):
     EXTRACT_METHOD = "Extract Method"
     EXTRACT_CLASS = "Extract Class"
     INTRODUCE_EXPLAINING_VARIABLE = "Introduce Explaining Variable"
+    MOVE_METHOD = "Move Method"
     REPLACE_DUPLICATE_LOGIC = "Replace Duplicate Logic With Shared Method"
     REMOVE_DEAD_CODE = "Remove Dead Code"
     RENAME = "Rename Variable / Method / Class"
