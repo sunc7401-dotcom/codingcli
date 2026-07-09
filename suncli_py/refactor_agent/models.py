@@ -38,6 +38,21 @@ class ProjectProfile:
         data["root"] = str(self.root)
         return data
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ProjectProfile:
+        return cls(
+            root=Path(data["root"]),
+            is_git_repo=bool(data["is_git_repo"]),
+            is_maven_project=bool(data["is_maven_project"]),
+            has_main_java=bool(data["has_main_java"]),
+            has_test_java=bool(data["has_test_java"]),
+            is_git_clean=bool(data["is_git_clean"]),
+            maven_version=data.get("maven_version"),
+            java_version=data.get("java_version"),
+            modules=[MavenModule(**module) for module in data.get("modules", [])],
+            warnings=list(data.get("warnings", [])),
+        )
+
 
 class SmellType(StrEnum):
     LONG_METHOD = "long_method"
@@ -95,6 +110,28 @@ class RefactorIssue:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RefactorIssue:
+        return cls(
+            id=data["id"],
+            type=SmellType(data["type"]),
+            severity=Severity(data["severity"]),
+            file_path=data["file_path"],
+            symbol=data.get("symbol"),
+            start_line=int(data["start_line"]),
+            end_line=int(data["end_line"]),
+            evidence=[
+                Evidence(message=evidence["message"], metrics=dict(evidence.get("metrics", {})))
+                for evidence in data.get("evidence", [])
+            ],
+            impact=data["impact"],
+            recommendation=data["recommendation"],
+            suggested_refactoring=RefactoringType(data["suggested_refactoring"]),
+            auto_applicable=bool(data["auto_applicable"]),
+            risk_level=RiskLevel(data["risk_level"]),
+            requires_review=bool(data["requires_review"]),
+        )
+
 
 @dataclass(frozen=True)
 class ScanResult:
@@ -108,3 +145,221 @@ class ScanResult:
             "issues": [issue.to_dict() for issue in self.issues],
             "warnings": self.warnings,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ScanResult:
+        return cls(
+            profile=ProjectProfile.from_dict(data["profile"]),
+            issues=[RefactorIssue.from_dict(issue) for issue in data.get("issues", [])],
+            warnings=list(data.get("warnings", [])),
+        )
+
+
+@dataclass(frozen=True)
+class JavaContext:
+    issue_id: str
+    target_file: str
+    target_symbol: str | None
+    source_excerpt: str
+    related_tests: list[str]
+    direct_callers: list[str]
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> JavaContext:
+        return cls(
+            issue_id=data["issue_id"],
+            target_file=data["target_file"],
+            target_symbol=data.get("target_symbol"),
+            source_excerpt=data.get("source_excerpt", ""),
+            related_tests=list(data.get("related_tests", [])),
+            direct_callers=list(data.get("direct_callers", [])),
+            warnings=list(data.get("warnings", [])),
+        )
+
+
+@dataclass(frozen=True)
+class CoverageAssessment:
+    has_related_test_class: bool
+    related_tests: list[str]
+    confidence: str
+    needs_characterization_test: bool
+    recommendation: str
+    jacoco_report_found: bool = False
+    changed_lines_total: int = 0
+    changed_lines_covered: int = 0
+    coverage_ratio: float = 0.0
+    generated_tests: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CoverageAssessment:
+        return cls(
+            has_related_test_class=bool(data["has_related_test_class"]),
+            related_tests=list(data.get("related_tests", [])),
+            confidence=data["confidence"],
+            needs_characterization_test=bool(data["needs_characterization_test"]),
+            recommendation=data["recommendation"],
+            jacoco_report_found=bool(data.get("jacoco_report_found", False)),
+            changed_lines_total=int(data.get("changed_lines_total", 0)),
+            changed_lines_covered=int(data.get("changed_lines_covered", 0)),
+            coverage_ratio=float(data.get("coverage_ratio", 0.0)),
+            generated_tests=list(data.get("generated_tests", [])),
+        )
+
+
+@dataclass(frozen=True)
+class RefactorPlan:
+    task_id: str
+    issue_id: str
+    goal: str
+    refactoring_type: RefactoringType
+    files_to_modify: list[str]
+    expected_changes: list[str]
+    out_of_scope: list[str]
+    risk_level: RiskLevel
+    risk_reasons: list[str]
+    verification_commands: list[str]
+    rollback_strategy: str
+    coverage_assessment: CoverageAssessment
+    requires_user_confirmation: bool
+    context: JavaContext
+    planning_source: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RefactorPlan:
+        return cls(
+            task_id=data["task_id"],
+            issue_id=data["issue_id"],
+            goal=data["goal"],
+            refactoring_type=RefactoringType(data["refactoring_type"]),
+            files_to_modify=list(data.get("files_to_modify", [])),
+            expected_changes=list(data.get("expected_changes", [])),
+            out_of_scope=list(data.get("out_of_scope", [])),
+            risk_level=RiskLevel(data["risk_level"]),
+            risk_reasons=list(data.get("risk_reasons", [])),
+            verification_commands=list(data.get("verification_commands", [])),
+            rollback_strategy=data["rollback_strategy"],
+            coverage_assessment=CoverageAssessment.from_dict(data["coverage_assessment"]),
+            requires_user_confirmation=bool(data["requires_user_confirmation"]),
+            context=JavaContext.from_dict(data["context"]),
+            planning_source=data["planning_source"],
+        )
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    command: str
+    exit_code: int
+    stdout: str = ""
+    stderr: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CommandResult:
+        return cls(
+            command=data["command"],
+            exit_code=int(data["exit_code"]),
+            stdout=data.get("stdout", ""),
+            stderr=data.get("stderr", ""),
+        )
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    status: str
+    commands: list[CommandResult]
+    coverage: CoverageAssessment
+    static_findings: list[str] = field(default_factory=list)
+    diff_summary: str = ""
+    message: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "commands": [command.to_dict() for command in self.commands],
+            "coverage": self.coverage.to_dict(),
+            "static_findings": self.static_findings,
+            "diff_summary": self.diff_summary,
+            "message": self.message,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> VerificationResult:
+        return cls(
+            status=data["status"],
+            commands=[CommandResult.from_dict(command) for command in data.get("commands", [])],
+            coverage=CoverageAssessment.from_dict(data["coverage"]),
+            static_findings=list(data.get("static_findings", [])),
+            diff_summary=data.get("diff_summary", ""),
+            message=data.get("message", ""),
+        )
+
+
+@dataclass(frozen=True)
+class CharacterizationTestPlan:
+    issue_id: str
+    target_class: str
+    target_methods: list[str]
+    test_framework: str
+    destination_file: str
+    assertion_intent: list[str]
+    content: str
+    user_confirmed: bool = False
+    pre_refactor_test_result: CommandResult | None = None
+    usable_as_refactor_guard: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["pre_refactor_test_result"] = (
+            self.pre_refactor_test_result.to_dict() if self.pre_refactor_test_result else None
+        )
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CharacterizationTestPlan:
+        precheck = data.get("pre_refactor_test_result")
+        return cls(
+            issue_id=data["issue_id"],
+            target_class=data["target_class"],
+            target_methods=list(data.get("target_methods", [])),
+            test_framework=data["test_framework"],
+            destination_file=data["destination_file"],
+            assertion_intent=list(data.get("assertion_intent", [])),
+            content=data.get("content", ""),
+            user_confirmed=bool(data.get("user_confirmed", False)),
+            pre_refactor_test_result=CommandResult.from_dict(precheck) if precheck else None,
+            usable_as_refactor_guard=bool(data.get("usable_as_refactor_guard", False)),
+        )
+
+
+@dataclass(frozen=True)
+class RollbackResult:
+    status: str
+    task_id: str
+    restored_files: list[str]
+    conflicts: list[str] = field(default_factory=list)
+    message: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RollbackResult:
+        return cls(
+            status=data["status"],
+            task_id=data["task_id"],
+            restored_files=list(data.get("restored_files", [])),
+            conflicts=list(data.get("conflicts", [])),
+            message=data.get("message", ""),
+        )

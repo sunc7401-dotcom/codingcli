@@ -10,6 +10,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from suncli_py.refactor_agent.java_ast import AstFileAnalysis, JavaAstError, JavaParserAnalyzer
 from suncli_py.refactor_agent.models import (
     Evidence,
     RefactoringType,
@@ -73,14 +74,22 @@ def _default_command_runner(command: Sequence[str], cwd: Path) -> subprocess.Com
 class JavaSmellScanner:
     """Scan Java source files with deterministic local heuristics."""
 
-    def __init__(self, root: str | Path, command_runner: CommandRunner | None = None) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        command_runner: CommandRunner | None = None,
+        ast_command_runner: CommandRunner | None = None,
+        use_javaparser: bool = True,
+    ) -> None:
         self.root = Path(root).resolve()
         self._run = command_runner or _default_command_runner
+        self._ast_analyzer = JavaParserAnalyzer(self.root, ast_command_runner) if use_javaparser else None
         self.warnings: list[str] = []
 
     def scan(self) -> list[RefactorIssue]:
         self.warnings = []
-        analyses = [self._analyze_file(path) for path in self._collect_java_files()]
+        java_files = self._collect_java_files()
+        analyses = self._analyze_files(java_files)
         issues: list[RefactorIssue] = []
 
         issues.extend(self._scan_long_methods(analyses))
@@ -126,6 +135,59 @@ class JavaSmellScanner:
         methods = _extract_methods(sanitized)
         classes = _extract_classes(sanitized)
         return JavaFileAnalysis(path, relative_path, lines, sanitized, methods, classes)
+
+    def _analyze_files(self, paths: list[Path]) -> list[JavaFileAnalysis]:
+        if self._ast_analyzer is None:
+            return [self._analyze_file(path) for path in paths]
+        try:
+            ast_by_path = {analysis.relative_path: analysis for analysis in self._ast_analyzer.analyze_files(paths)}
+        except JavaAstError as err:
+            self.warnings.append(f"JavaParser AST 解析不可用，已降级为文本启发式扫描: {err}")
+            return [self._analyze_file(path) for path in paths]
+
+        analyses: list[JavaFileAnalysis] = []
+        for path in paths:
+            relative_path = path.relative_to(self.root).as_posix()
+            ast_analysis = ast_by_path.get(relative_path)
+            if ast_analysis is None:
+                analyses.append(self._analyze_file(path))
+            else:
+                analyses.append(self._analysis_from_ast(ast_analysis))
+        return analyses
+
+    def _analysis_from_ast(self, ast_analysis: AstFileAnalysis) -> JavaFileAnalysis:
+        lines = ast_analysis.path.read_text(encoding="utf-8", errors="replace").splitlines()
+        sanitized = _strip_comments_and_strings(lines)
+        methods = [
+            JavaMethod(
+                name=method.name,
+                start_line=method.start_line,
+                end_line=method.end_line,
+                body_lines=sanitized[method.start_line - 1 : method.end_line],
+                signature=method.signature,
+                is_private=method.is_private,
+                is_static=method.is_static,
+            )
+            for method in ast_analysis.methods
+        ]
+        classes = [
+            JavaClass(
+                name=class_info.name,
+                start_line=class_info.start_line,
+                end_line=class_info.end_line,
+                body_lines=sanitized[class_info.start_line - 1 : class_info.end_line],
+                kind=class_info.kind,
+            )
+            for class_info in ast_analysis.classes
+        ]
+        return JavaFileAnalysis(
+            path=ast_analysis.path,
+            relative_path=ast_analysis.relative_path,
+            lines=lines,
+            sanitized_lines=sanitized,
+            methods=methods,
+            classes=classes,
+        )
 
     def _scan_long_methods(self, analyses: Iterable[JavaFileAnalysis]) -> list[RefactorIssue]:
         issues: list[RefactorIssue] = []
