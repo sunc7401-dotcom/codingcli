@@ -54,6 +54,7 @@ dev = [
 
 [project.scripts]
 paicli = "suncli_py.cli.main:main"
+refactor-agent = "suncli_py.refactor_agent.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["suncli_py*"]
