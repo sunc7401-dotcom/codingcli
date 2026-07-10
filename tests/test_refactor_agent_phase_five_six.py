@@ -75,9 +75,10 @@ def test_rollback_detects_conflict_then_restores_with_confirmation(
     monkeypatch,
 ) -> None:
     source_path = _write_java_file(tmp_path)
-    _save_plan(tmp_path, _dead_code_issue(source_path))
+    issue = _dead_code_issue(source_path)
+    _save_plan(tmp_path, issue)
     monkeypatch.chdir(tmp_path)
-    assert run_apply(issue_id="RA-0001", assume_yes=True) == 0
+    assert run_apply(issue_id="RA-0001", assume_yes=True, llm_assistant=_FakePatchAssistant(issue)) == 0
     assert "unusedPrivate" not in source_path.read_text(encoding="utf-8")
 
     source_path.write_text(source_path.read_text(encoding="utf-8").replace("input + 1", "input + 2"), encoding="utf-8")
@@ -198,3 +199,22 @@ def _write_jacoco_xml(root: Path, start_line: int) -> None:
 """.strip(),
         encoding="utf-8",
     )
+
+
+class _FakePatchAssistant:
+    def __init__(self, issue: RefactorIssue) -> None:
+        self.issue = issue
+
+    def generate_edit_plan(self, plan: RefactorPlan, issue: RefactorIssue) -> dict:
+        del plan, issue
+        return {
+            "edits": [
+                {
+                    "file_path": self.issue.file_path,
+                    "start_line": self.issue.start_line,
+                    "end_line": self.issue.end_line,
+                    "replacement": "",
+                }
+            ],
+            "explanation": "LLM removes dead private method",
+        }

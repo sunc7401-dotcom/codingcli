@@ -5,7 +5,9 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from suncli_py.refactor_agent.java_ast import JavaParserAnalyzer
+import pytest
+
+from suncli_py.refactor_agent.java_ast import JavaAstError, JavaParserAnalyzer
 from suncli_py.refactor_agent.models import SmellType
 from suncli_py.refactor_agent.scanner import JavaSmellScanner
 
@@ -29,6 +31,22 @@ def test_scanner_uses_javaparser_ast_method_ranges(tmp_path: Path) -> None:
     assert long_method.start_line == 4
     assert long_method.end_line == 90
     assert not any("JavaParser AST 解析不可用" in warning for warning in scanner.warnings)
+
+
+def test_scanner_requires_javaparser_ast(tmp_path: Path) -> None:
+    source_dir = tmp_path / "src" / "main" / "java" / "demo"
+    source_dir.mkdir(parents=True)
+    (source_dir / "OrderService.java").write_text(_java_source(), encoding="utf-8")
+
+    scanner = JavaSmellScanner(
+        tmp_path,
+        command_runner=_pmd_runner,
+        ast_command_runner=_failing_ast_runner,
+    )
+
+    with pytest.raises(JavaAstError, match="JavaParser helper failed"):
+        scanner.scan()
+    assert scanner.warnings == []
 
 
 def test_javaparser_symbol_solver_extracts_method_calls(tmp_path: Path) -> None:
@@ -144,6 +162,12 @@ def _ast_runner(command: Sequence[str], cwd: Path) -> subprocess.CompletedProces
         ]
     }
     return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+
+def _failing_ast_runner(command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    del cwd
+    assert "exec:java" in command
+    return subprocess.CompletedProcess(command, 1, stdout="", stderr="javaparser unavailable")
 
 
 def _java_source() -> str:

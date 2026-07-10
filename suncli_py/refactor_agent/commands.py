@@ -7,6 +7,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from suncli_py.refactor_agent.java_ast import JavaAstError
 from suncli_py.refactor_agent.llm_assistant import RefactorLlmAssistant
 from suncli_py.refactor_agent.models import (
     CharacterizationTestPlan,
@@ -47,10 +48,12 @@ def run_scan(*, output_format: str = "text", llm_assistant: RefactorLlmAssistant
             return 1
 
     scanner = JavaSmellScanner(profile.root)
-    issues = scanner.scan()
-    assistant = llm_assistant or RefactorLlmAssistant.from_config()
-    if assistant is not None:
-        issues = assistant.explain_issues(profile.root, issues)
+    try:
+        issues = scanner.scan()
+    except JavaAstError as err:
+        raise RefactorAgentError(f"JavaParser AST 解析失败，scan 已停止: {err}") from err
+    assistant = _require_llm_assistant(llm_assistant)
+    issues = assistant.triage_issues(profile.root, issues)
     result = ScanResult(profile=profile, issues=issues, warnings=scanner.warnings)
     saved_path = RefactorAgentStorage(profile.root).save_scan_result(result)
 
@@ -75,9 +78,8 @@ def run_plan(*, issue_id: str, llm_assistant: RefactorLlmAssistant | None = None
         raise RefactorAgentError(f"未找到 issue: {issue_id}")
 
     plan = RefactorPlanner(root).create_plan(issue)
-    assistant = llm_assistant or RefactorLlmAssistant.from_config()
-    if assistant is not None:
-        plan = assistant.enhance_plan(plan, issue)
+    assistant = _require_llm_assistant(llm_assistant)
+    plan = assistant.generate_plan(root, plan, issue)
     plan_json_path, plan_md_path = storage.save_plan(plan, issue)
 
     print(format_refactor_plan(plan, str(plan_json_path), str(plan_md_path)))
@@ -89,6 +91,8 @@ def run_apply(
     issue_id: str,
     assume_yes: bool = False,
     llm_assistant: RefactorLlmAssistant | None = None,
+    max_repair_attempts: int = 0,
+    command_runner: CommandRunner | None = None,
 ) -> int:
     root = Path(".").resolve()
     storage = RefactorAgentStorage(root)
@@ -106,8 +110,10 @@ def run_apply(
 
     patcher = RefactorPatcher(root)
     try:
-        assistant = llm_assistant or RefactorLlmAssistant.from_config()
-        llm_edit_plan = assistant.generate_edit_plan(plan, issue) if assistant else None
+        assistant = _require_llm_assistant(llm_assistant)
+        llm_edit_plan = assistant.generate_edit_plan(plan, issue)
+        if not llm_edit_plan:
+            raise PatchError("LLM did not return any usable edit operation.")
         changes = patcher.generate_changes(plan, issue, llm_edit_plan=llm_edit_plan)
         result = patcher.apply_changes(plan, changes, task_dir)
     except PatchError as err:
@@ -121,7 +127,57 @@ def run_apply(
             result.diff_text,
         )
     )
-    return 0
+    if max_repair_attempts <= 0:
+        return 0
+
+    verifier = VerificationPipeline(root, command_runner=command_runner)
+    verification = verifier.verify(plan, issue, task_dir)
+    storage.save_verification(task_dir, verification)
+    if verification.status in {"passed", "warning"}:
+        _generate_report(root, storage, task_dir, plan, issue)
+        print(format_verification_result(verification))
+        return 0
+
+    for attempt in range(1, max_repair_attempts + 1):
+        print(f"repair attempt {attempt}/{max_repair_attempts}")
+        try:
+            rollback_result = TaskRollbacker(root).rollback(task_dir, force=True)
+            if rollback_result.status != "rolled_back":
+                break
+            repair_plan = assistant.generate_repair_edit_plan(root, plan, issue, verification, attempt=attempt)
+            if not repair_plan:
+                break
+            changes = patcher.generate_changes(plan, issue, llm_edit_plan=repair_plan)
+            result = patcher.apply_changes(plan, changes, task_dir)
+            print(
+                format_apply_result(
+                    result.changed_files,
+                    str(result.snapshot_path),
+                    str(result.patch_path),
+                    result.diff_text,
+                )
+            )
+            verification = verifier.verify(plan, issue, task_dir)
+            storage.save_verification(task_dir, verification)
+            if verification.status in {"passed", "warning"}:
+                _generate_report(root, storage, task_dir, plan, issue)
+                print(format_verification_result(verification))
+                return 0
+        except (PatchError, RollbackError) as err:
+            raise RefactorAgentError(str(err)) from err
+
+    _generate_report(root, storage, task_dir, plan, issue)
+    print(format_verification_result(verification))
+    return 1
+
+
+def _require_llm_assistant(candidate: RefactorLlmAssistant | None) -> RefactorLlmAssistant:
+    assistant = candidate or RefactorLlmAssistant.from_config()
+    if assistant is None:
+        raise RefactorAgentError(
+            "LLM assistant is required for refactor-agent. Configure an LLM provider before running scan/plan/apply."
+        )
+    return assistant
 
 
 def run_verify(*, issue_id: str | None = None, command_runner: CommandRunner | None = None) -> int:

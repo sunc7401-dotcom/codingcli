@@ -67,9 +67,15 @@ def test_scan_json_outputs_profile(
     (tmp_path / "pom.xml").write_text("<project />", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
-    exit_code = run_scan(output_format="json")
+    exit_code = run_scan(output_format="json", llm_assistant=_FakeTriageAssistant())
 
     assert exit_code == 0
     output = capsys.readouterr().out
     assert '"is_git_repo": true' in output
     assert '"is_maven_project": true' in output
+
+
+class _FakeTriageAssistant:
+    def triage_issues(self, root: Path, issues: list) -> list:
+        del root
+        return issues

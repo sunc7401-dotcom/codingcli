@@ -90,11 +90,10 @@ class JavaSmellScanner:
         root: str | Path,
         command_runner: CommandRunner | None = None,
         ast_command_runner: CommandRunner | None = None,
-        use_javaparser: bool = True,
     ) -> None:
         self.root = Path(root).resolve()
         self._run = command_runner or _default_command_runner
-        self._ast_analyzer = JavaParserAnalyzer(self.root, ast_command_runner) if use_javaparser else None
+        self._ast_analyzer = JavaParserAnalyzer(self.root, ast_command_runner)
         self.warnings: list[str] = []
 
     def scan(self) -> list[RefactorIssue]:
@@ -140,31 +139,15 @@ class JavaSmellScanner:
             files.append(path)
         return sorted(files)
 
-    def _analyze_file(self, path: Path) -> JavaFileAnalysis:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        sanitized = _strip_comments_and_strings(lines)
-        relative_path = path.relative_to(self.root).as_posix()
-        methods = _extract_methods(sanitized)
-        classes = _extract_classes(sanitized)
-        return JavaFileAnalysis(path, relative_path, lines, sanitized, methods, classes)
-
     def _analyze_files(self, paths: list[Path]) -> list[JavaFileAnalysis]:
-        if self._ast_analyzer is None:
-            return [self._analyze_file(path) for path in paths]
-        try:
-            ast_by_path = {analysis.relative_path: analysis for analysis in self._ast_analyzer.analyze_files(paths)}
-        except JavaAstError as err:
-            self.warnings.append(f"JavaParser AST 解析不可用，已降级为文本启发式扫描: {err}")
-            return [self._analyze_file(path) for path in paths]
-
+        ast_by_path = {analysis.relative_path: analysis for analysis in self._ast_analyzer.analyze_files(paths)}
         analyses: list[JavaFileAnalysis] = []
         for path in paths:
             relative_path = path.relative_to(self.root).as_posix()
             ast_analysis = ast_by_path.get(relative_path)
             if ast_analysis is None:
-                analyses.append(self._analyze_file(path))
-            else:
-                analyses.append(self._analysis_from_ast(ast_analysis))
+                raise JavaAstError(f"JavaParser returned no AST for {relative_path}")
+            analyses.append(self._analysis_from_ast(ast_analysis))
         return analyses
 
     def _analysis_from_ast(self, ast_analysis: AstFileAnalysis) -> JavaFileAnalysis:
@@ -697,110 +680,6 @@ def _strip_comments_and_strings(lines: list[str]) -> list[str]:
             index += 1
         sanitized.append("".join(output))
     return sanitized
-
-
-def _extract_methods(lines: list[str]) -> list[JavaMethod]:
-    methods: list[JavaMethod] = []
-    pending_signature: list[tuple[int, str]] = []
-    index = 0
-    while index < len(lines):
-        line = lines[index].strip()
-        if not line:
-            pending_signature.clear()
-            index += 1
-            continue
-        if pending_signature or _looks_like_method_signature_start(line):
-            pending_signature.append((index + 1, line))
-            signature = " ".join(part for _, part in pending_signature)
-            if "{" not in line:
-                index += 1
-                continue
-            if _is_method_signature(signature):
-                start_line = pending_signature[0][0]
-                end_index = _find_block_end(lines, index)
-                name = _method_name(signature)
-                if name:
-                    body_lines = lines[index : end_index + 1]
-                    methods.append(
-                        JavaMethod(
-                            name=name,
-                            start_line=start_line,
-                            end_line=end_index + 1,
-                            body_lines=body_lines,
-                            signature=signature,
-                            declaring_type="",
-                            resolved_signature="",
-                            symbol_resolved=False,
-                            is_private=bool(re.search(r"\bprivate\b", signature)),
-                            is_static=bool(re.search(r"\bstatic\b", signature)),
-                            method_calls=[],
-                            field_accesses=[],
-                        )
-                    )
-                    pending_signature.clear()
-                    index = end_index + 1
-                    continue
-            pending_signature.clear()
-        index += 1
-    return methods
-
-
-def _looks_like_method_signature_start(line: str) -> bool:
-    if line.startswith(("@", "if ", "for ", "while ", "switch ", "catch ", "return ", "new ")):
-        return False
-    return "(" in line and not line.endswith(";")
-
-
-def _is_method_signature(signature: str) -> bool:
-    prefix = signature.split("(", 1)[0]
-    if "=" in prefix or "->" in signature:
-        return False
-    if re.search(r"\b(if|for|while|switch|catch|synchronized|try|new)\s*\(", signature):
-        return False
-    if re.search(r"\b(class|interface|enum|record)\b", prefix):
-        return False
-    return _method_name(signature) is not None
-
-
-def _method_name(signature: str) -> str | None:
-    match = re.search(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*(?:throws\s+[A-Za-z0-9_.,\s]+)?\{", signature)
-    if not match:
-        return None
-    return match.group(1)
-
-
-def _extract_classes(lines: list[str]) -> list[JavaClass]:
-    classes: list[JavaClass] = []
-    pattern = re.compile(r"\b(class|interface|enum|record)\s+([A-Za-z_][A-Za-z0-9_]*)")
-    for index, line in enumerate(lines):
-        match = pattern.search(line)
-        if not match:
-            continue
-        end_index = _find_block_end(lines, index)
-        classes.append(
-            JavaClass(
-                name=match.group(2),
-                start_line=index + 1,
-                end_line=end_index + 1,
-                body_lines=lines[index : end_index + 1],
-                kind=match.group(1),
-            )
-        )
-    return classes
-
-
-def _find_block_end(lines: list[str], start_index: int) -> int:
-    depth = 0
-    seen_open = False
-    for index in range(start_index, len(lines)):
-        line = lines[index]
-        depth += line.count("{")
-        if line.count("{"):
-            seen_open = True
-        depth -= line.count("}")
-        if seen_open and depth <= 0:
-            return index
-    return len(lines) - 1
 
 
 def _count_branches(lines: list[str]) -> int:

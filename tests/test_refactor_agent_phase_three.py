@@ -42,7 +42,7 @@ def test_plan_generates_structured_files_from_scanned_issue(
     )
     monkeypatch.chdir(tmp_path)
 
-    exit_code = run_plan(issue_id="RA-0001")
+    exit_code = run_plan(issue_id="RA-0001", llm_assistant=_FakePlanAssistant())
 
     assert exit_code == 0
     output = capsys.readouterr().out
@@ -62,7 +62,7 @@ def test_plan_generates_structured_files_from_scanned_issue(
     assert plan["coverage_assessment"]["has_related_test_class"] is True
     assert plan["coverage_assessment"]["related_tests"] == ["src/test/java/demo/OrderServiceTest.java"]
     assert plan["requires_user_confirmation"] is True
-    assert plan["planning_source"] == "rule-fallback"
+    assert plan["planning_source"] == "llm-primary"
     assert "mvn test" in plan["verification_commands"]
 
 
@@ -120,3 +120,11 @@ def _issue() -> RefactorIssue:
         risk_level=RiskLevel.MEDIUM,
         requires_review=False,
     )
+
+
+class _FakePlanAssistant:
+    def generate_plan(self, root: Path, plan, issue):
+        del root, issue
+        from dataclasses import replace
+
+        return replace(plan, planning_source="llm-primary")
