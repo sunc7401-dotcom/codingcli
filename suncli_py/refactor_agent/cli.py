@@ -51,6 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--task", help="task id; defaults to the latest task")
     report_parser.add_argument("--latest", action="store_true", help="show reports/latest.md")
 
+    subparsers.add_parser("chat", help="start an interactive refactor-agent chat session")
+
     return parser
 
 
@@ -79,6 +81,10 @@ def main() -> None:
             raise SystemExit(run_rollback(task_id=args.task, assume_yes=args.yes))
         if args.command == "report":
             raise SystemExit(run_report(task_id=args.task, latest=args.latest))
+        if args.command == "chat":
+            from suncli_py.refactor_agent.chat import run_chat
+
+            raise SystemExit(run_chat())
     except RefactorAgentError as err:
         parser.exit(2, f"error: {err}\n")
 

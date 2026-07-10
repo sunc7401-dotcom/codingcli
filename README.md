@@ -1,113 +1,99 @@
 # LLM-driven refactor-CLI
 
-LLM-driven refactor-CLI is a local Java code inspection and safe refactoring agent for Maven repositories. It uses JavaParser AST, Symbol Solver, static code-smell candidates, LLM decision making, controlled edit operations, AST validation, Maven verification, repair loops, task snapshots, and rollback to make automated refactoring reviewable and recoverable.
+LLM-driven refactor-CLI 是一个面向 Java Maven 仓库的本地代码检查与安全重构 Agent。项目的核心目标不是让大模型直接改代码，而是把大模型放进一条可审查、可验证、可回滚的软件工程流程中：大模型负责决策和生成候选修改，工具负责提供事实，patcher 负责受控落地，AST 校验和 Maven 测试负责反馈。
 
-The project is centered on one workflow:
+## 项目定位
 
-```text
-Java Maven repository
-  -> extract deterministic code facts
-  -> let the LLM triage issues and choose a strategy
-  -> generate a user-reviewable refactoring plan
-  -> confirm before changing code
-  -> let the LLM generate structured edit operations
-  -> apply edits through a controlled patcher
-  -> validate AST shape and public API safety
-  -> run compile/tests/coverage
-  -> repair or roll back when verification fails
-```
-
-## Core Idea
-
-The LLM is the decision core, but it does not directly write files.
+这个项目聚焦 Java 项目的代码检测与重构闭环：
 
 ```text
-LLM makes decisions.
-AST, Symbol Solver, rules, tests, and tools provide evidence.
-RefactorPatcher applies controlled edits.
-AST validation and Maven tests provide feedback.
-Snapshots make every task recoverable.
+Java Maven 项目
+  -> 抽取 AST / Symbol Solver 结构化事实
+  -> 静态规则生成候选坏味道
+  -> LLM 判断候选是否值得修、风险和优先级
+  -> LLM 生成用户可审查的重构计划
+  -> 用户确认
+  -> LLM 生成 JSON edit operations
+  -> RefactorPatcher 受控写入文件
+  -> AST Patch Validator 校验结构安全
+  -> Maven compile / test / JaCoCo 验证
+  -> 失败时回滚并进入 LLM repair loop
+  -> 生成报告
 ```
 
-This design keeps the model useful for semantic judgment and code generation while keeping file writes, validation, and rollback under deterministic control.
-
-## Main Capabilities
-
-- Project detection for Java Maven Git repositories.
-- JavaParser AST extraction for classes, methods, source ranges, method calls, and field accesses.
-- Symbol Solver resolution for declaring types and resolved method signatures.
-- Static candidate generation for common Java code smells.
-- LLM-driven issue triage, priority, risk, and refactoring strategy.
-- LLM-generated refactoring plans that users can review before applying.
-- Read-only LLM tools for source context, related tests, callers, plan context, and verification feedback.
-- JSON edit operations instead of direct model file writes.
-- Controlled patch application with allowed-file and path-boundary checks.
-- AST patch validation to catch unsafe structural changes.
-- Maven compile/test and JaCoCo coverage feedback.
-- Optional LLM repair loop after verification failure.
-- Task-level snapshot, rollback, and Markdown reports.
-
-## Architecture
+一句话概括：
 
 ```text
-refactor-agent scan
-  -> ProjectDetector.detect
-  -> JavaSmellScanner.scan
-  -> JavaParserAnalyzer.analyze_files
-  -> JavaAstDump.java
-  -> RefactorLlmAssistant.triage_issues
-  -> RefactorAgentStorage.save_scan_result
-
-refactor-agent plan --issue RA-0001
-  -> RefactorAgentStorage.find_issue
-  -> RefactorPlanner.create_plan
-  -> RefactorLlmAssistant.generate_plan
-  -> RefactorAgentStorage.save_plan
-
-refactor-agent apply --issue RA-0001
-  -> RefactorAgentStorage.load_latest_plan_for_issue
-  -> user confirmation
-  -> RefactorLlmAssistant.generate_edit_plan
-  -> RefactorPatcher.generate_changes
-  -> RefactorPatcher.apply_changes
-  -> AstPatchValidator.validate
-  -> optional VerificationPipeline.verify
-  -> optional RefactorLlmAssistant.generate_repair_edit_plan
-
-refactor-agent verify
-  -> VerificationPipeline.verify
-  -> CoverageAnalyzer.assess
-  -> ReportGenerator.generate
-
-refactor-agent rollback
-  -> TaskRollbacker.rollback
-  -> ReportGenerator.generate
+LLM 是决策核心
+AST / Symbol Solver / 规则 / 测试是证据系统
+工具是上下文接口
+patcher 是行动接口
+验证和回滚是安全系统
 ```
 
-## LLM-Driven Stages
+## 核心能力
+
+- 检测当前目录是否为 Java Maven Git 项目。
+- 使用 JavaParser AST 提取类、方法、源码行号、方法调用和字段访问。
+- 使用 Symbol Solver 解析方法调用、字段访问、声明类型和 resolved signature。
+- 通过静态规则生成代码坏味道候选。
+- 由 LLM 对候选 issue 做 triage，判断优先级、风险、是否适合自动修复和重构策略。
+- 由 LLM 生成用户可审查的重构计划。
+- 提供只读工具，让 LLM 在决策前获取源码片段、相关测试、调用方、计划上下文和验证反馈。
+- 用户确认后，由 LLM 生成结构化 JSON edit operations。
+- 由 RefactorPatcher 检查 allowed files、路径边界和行号范围后落地修改。
+- 使用 AST Patch Validator 拦截语法结构破坏和 public API 意外变化。
+- 使用 Maven compile/test 和 JaCoCo 做验证与覆盖感知。
+- 验证失败时可回滚并让 LLM 基于失败反馈生成 repair edits。
+- 保存任务级 snapshot、patch diff、verification、rollback 和 Markdown report。
+
+## 支持的代码坏味道
+
+当前扫描器会生成以下候选问题：
+
+- Long Method
+- Large Class
+- Complex Condition
+- Unclear Naming
+- Dead Code
+- Feature Envy
+- Duplicate Code
+
+其中：
+
+- Dead Code 优先使用 Symbol Solver 的 resolved signature 判断 private 方法是否被调用。
+- Feature Envy 使用方法调用和字段访问的 declaring type 判断外部类型依赖。
+- Duplicate Code 优先尝试 PMD CPD，失败时使用本地 normalized-window 规则。
+- JavaParser AST 是扫描链路的必要前置条件。
+
+## LLM 决策阶段
 
 ### 1. Issue Triage
 
-The scanner generates candidates from AST and static rules. The LLM decides which candidates are worth fixing, how risky they are, whether they are suitable for automation, and which refactoring strategy should be used.
+静态规则和 AST 只提供候选问题，不直接决定最终结果。LLM 会基于结构化 evidence、源码片段、相关测试和调用方判断：
 
-The scanner is evidence, not the final judge.
+- 候选是否值得修。
+- 严重程度和风险等级。
+- 是否适合自动修复。
+- 应选择哪种重构策略。
+- 为什么优先处理该问题。
 
-### 2. Refactoring Plan
+### 2. Plan
 
-The planner creates a safe scaffold. The LLM turns it into a user-reviewable plan with:
+计划阶段先由 deterministic planner 生成安全骨架，再由 LLM 生成最终计划。计划会包含：
 
-- goal
-- refactoring type
-- files to modify
-- expected changes
-- out-of-scope items
-- risk reasons
-- verification commands
-- rollback strategy
+- 重构目标。
+- 重构类型。
+- 允许修改的文件。
+- 预期改动。
+- 不在本次范围内的内容。
+- 风险原因。
+- 验证命令。
+- 回滚策略。
 
-### 3. Controlled Edit Generation
+### 3. Apply
 
-After user confirmation, the LLM returns structured JSON edit operations:
+用户确认后，LLM 只能返回结构化 edit operations，例如：
 
 ```json
 {
@@ -125,15 +111,23 @@ After user confirmation, the LLM returns structured JSON edit operations:
 }
 ```
 
-The model does not claim files were changed. `RefactorPatcher` decides whether the edits can be applied.
+LLM 不直接写文件。真正写文件的是 `RefactorPatcher`。
 
 ### 4. Repair Loop
 
-When verification fails, the system can roll back the failed patch, send verification feedback to the LLM, ask for revised edit operations, apply them, and verify again.
+如果 apply 后验证失败，系统可以：
 
-## Read-Only LLM Tools
+```text
+回滚到任务快照
+  -> 把验证失败反馈交给 LLM
+  -> LLM 生成 revised edit operations
+  -> 再次 apply
+  -> 再次 verify
+```
 
-The LLM can request more context before deciding:
+## 只读工具调用
+
+LLM 在做 triage、plan、edit 或 repair 前，可以调用只读工具补充上下文：
 
 - `get_issue_context`
 - `read_file`
@@ -141,51 +135,32 @@ The LLM can request more context before deciding:
 - `get_plan_context`
 - `get_verification_feedback`
 
-These tools are implemented in `suncli_py/refactor_agent/toolbox.py`. They provide code and verification context without giving the LLM write access.
+这些工具只提供上下文，不具备写文件能力。
 
-## Supported Code Smells
+## 安全设计
 
-The scanner currently generates candidates for:
+### 受控 Patch 范围
 
-- Long Method
-- Large Class
-- Complex Condition
-- Unclear Naming
-- Dead Code
-- Feature Envy
-- Duplicate Code
+patcher 会强制检查：
 
-Implementation notes:
+- edit 只能修改 `plan.files_to_modify` 中的文件。
+- 路径必须在仓库根目录内。
+- 不能修改 `.git`、`target`、`build` 等忽略目录。
+- 行号范围必须合法。
+- patch 前必须写 snapshot。
+- patch 失败必须恢复原文件。
 
-- Dead Code uses Symbol Solver resolved signatures when available.
-- Feature Envy uses resolved declaring types for method calls and field accesses.
-- Duplicate Code tries PMD CPD first and falls back to a local normalized-window detector.
-- JavaParser AST is required for scanning.
+### AST Patch Validator
 
-## Safety Controls
+patch 写入后会重新解析 Java 文件，并检查：
 
-### Controlled Patch Scope
+- Java 文件是否仍可被 AST 解析。
+- class 声明是否异常变化。
+- 非 private 方法签名是否被意外修改。
 
-The patcher enforces:
+### Maven 验证
 
-- edits must target `plan.files_to_modify`
-- paths must stay inside the repository
-- ignored build/runtime directories cannot be modified
-- line ranges must be valid
-- patch diffs and snapshots must be written
-- files are restored if patch application fails
-
-### AST Patch Validation
-
-After patching, changed Java files are parsed again. The validator checks:
-
-- Java files remain parseable
-- class declarations are not unexpectedly changed
-- externally visible method signatures are preserved unless explicitly allowed
-
-### Maven Verification
-
-Verification runs:
+验证阶段会执行：
 
 ```text
 mvn -q -DskipTests compile
@@ -193,97 +168,91 @@ mvn test
 mvn org.jacoco:jacoco-maven-plugin:prepare-agent test org.jacoco:jacoco-maven-plugin:report
 ```
 
-The result is stored as a structured verification artifact and can be used by the repair loop.
+验证结果会保存为结构化 `VerificationResult`，并可作为 repair loop 的输入。
 
-### Task-Level Rollback
+### 任务级回滚
 
-Every applied task stores a local snapshot. Rollback restores only files touched by that task and does not use `git reset --hard`.
+每次 apply 都会保存任务级 snapshot。rollback 只恢复本次任务涉及的文件，不使用 `git reset --hard`，避免误伤用户工作区。
 
-## Command Usage
+## 项目使用方式
 
-Install dependencies:
+项目只推荐通过命令式交互 shell 使用。
 
-```bash
-uv sync
-```
-
-Scan Java code-smell candidates and let the LLM triage them:
+在目标 Java Maven 项目根目录启动：
 
 ```bash
-uv run refactor-agent scan
+refactor-agent chat
 ```
 
-Generate a user-reviewable refactoring plan:
+如果 Windows 找不到 `refactor-agent` 命令，可以在目标 Java 项目目录中使用 Python 项目的虚拟环境入口：
 
-```bash
-uv run refactor-agent plan --issue RA-0001
+```bat
+D:\train\pai-cli\paicli-py\.venv\Scripts\refactor-agent.exe chat
 ```
 
-Apply a confirmed refactoring:
+进入交互 shell 后，只输入固定命令，不使用自然语言：
 
-```bash
-uv run refactor-agent apply --issue RA-0001
+```text
+refactor-agent> help
+refactor-agent> scan
+refactor-agent> issues
+refactor-agent> select RA-0001
+refactor-agent> plan RA-0001
+refactor-agent> apply RA-0001 --yes --max-repair-attempts 1
+refactor-agent> verify RA-0001
+refactor-agent> report
+refactor-agent> rollback --yes
+refactor-agent> exit
 ```
 
-Apply with one repair attempt after verification failure:
+常用命令说明：
 
-```bash
-uv run refactor-agent apply --issue RA-0001 --yes --max-repair-attempts 1
-```
+| 命令 | 作用 |
+|---|---|
+| `scan` | 扫描当前 Java Maven 项目，并由 LLM 做 issue triage |
+| `issues` | 列出最近一次扫描得到的问题 |
+| `select RA-0001` | 选择当前操作的 issue |
+| `plan RA-0001` | 为指定 issue 生成 LLM 重构计划 |
+| `apply RA-0001` | 应用指定 issue 的重构，默认会要求确认 |
+| `apply RA-0001 --yes --max-repair-attempts 1` | 跳过低风险确认，并在验证失败时最多 repair 一次 |
+| `verify RA-0001` | 执行 Maven 编译、测试和覆盖感知 |
+| `characterize RA-0001` | 生成候选行为锁定测试 |
+| `report` | 查看最新报告 |
+| `rollback --yes` | 回滚最新任务 |
+| `status` | 查看当前选中的 issue 和最新任务 |
+| `help` | 查看命令帮助 |
+| `exit` | 退出交互 shell |
 
-Run verification:
-
-```bash
-uv run refactor-agent verify --issue RA-0001
-```
-
-Generate a characterization test before refactoring:
-
-```bash
-uv run refactor-agent characterize --issue RA-0001
-```
-
-Rollback the latest task:
-
-```bash
-uv run refactor-agent rollback
-```
-
-Show the latest report:
-
-```bash
-uv run refactor-agent report --latest
-```
-
-## Source Map
+## 源码结构
 
 ```text
 suncli_py/refactor_agent/
-|-- cli.py                 command-line parser
-|-- commands.py            scan / plan / apply / verify / rollback orchestration
-|-- project_detector.py    Java Maven Git project detection
-|-- java_ast.py            Python wrapper around JavaParser helper
+|-- cli.py                 refactor-agent 命令入口
+|-- chat.py                命令式交互 shell
+|-- commands.py            scan / plan / apply / verify / rollback 编排
+|-- project_detector.py    Java Maven Git 项目检测
+|-- java_ast.py            JavaParser helper 的 Python 包装
 |-- java_ast_helper/       JavaParser + Symbol Solver Maven helper
-|-- scanner.py             static smell candidate scanner
-|-- java_context.py        source excerpts, tests, and caller context
-|-- prompts.py             LLM system prompts for each stage
-|-- toolbox.py             read-only tools exposed to the LLM
-|-- llm_assistant.py       LLM triage, planning, edit generation, repair loop
-|-- planner.py             safe plan scaffold generation
-|-- patcher.py             controlled patch application and snapshots
-|-- patch_validator.py     AST-level patch validation
-|-- verifier.py            Maven compile/test/coverage verification
-|-- coverage.py            JaCoCo coverage assessment
-|-- test_generator.py      characterization test generation
-|-- rollback.py            task-level rollback
-|-- report.py              Markdown report generation
-|-- storage.py             repository-local task state
-`-- models.py              structured domain models
+|-- scanner.py             静态坏味道候选扫描
+|-- java_context.py        源码片段、相关测试和调用方上下文收集
+|-- prompts.py             LLM 分阶段系统提示词
+|-- toolbox.py             暴露给 LLM 的只读工具
+|-- llm_assistant.py       LLM triage、plan、edit、repair
+|-- planner.py             安全计划骨架生成
+|-- patcher.py             受控 patch 应用和 snapshot
+|-- patch_validator.py     AST patch 校验
+|-- verifier.py            Maven 编译、测试和覆盖验证
+|-- coverage.py            JaCoCo 覆盖感知
+|-- test_generator.py      Characterization test 生成
+|-- rollback.py            任务级回滚
+|-- report.py              Markdown 报告生成
+|-- storage.py             .paicli/refactor-agent 状态存储
+`-- models.py              业务数据模型
 ```
 
-## Stored Artifacts
+## 运行产物
 
-Runtime state is stored in the target repository:
+运行状态会保存在目标 Java 项目的本地目录：
 
 ```text
 .paicli/refactor-agent/
@@ -305,51 +274,44 @@ Runtime state is stored in the target repository:
         `-- after/
 ```
 
-`.paicli/` is ignored because it is runtime state.
+`.paicli/` 属于运行时状态，不应提交到业务仓库。
 
-## Development And Testing
+## 开发与测试
 
-Run focused tests:
+运行 chat 相关测试：
 
 ```bash
-uv run pytest tests/test_refactor_agent_*.py
+uv run pytest tests/test_refactor_agent_chat.py -q
 ```
 
-Run all tests:
+运行全部测试：
 
 ```bash
 uv run pytest tests -q
 ```
 
-Compile the JavaParser helper:
+编译 JavaParser helper：
 
 ```bash
 mvn -q -f suncli_py/refactor_agent/java_ast_helper/pom.xml compile
 ```
 
-Useful local checks:
+## 测评指标
 
-```bash
-uv run ruff check suncli_py/refactor_agent tests
-uv run python -m compileall -q suncli_py/refactor_agent tests
-```
-
-## Evaluation Metrics
-
-| Metric | Meaning |
+| 指标 | 含义 |
 |---|---|
-| Triage precision | How many LLM-kept issues are real code smells |
-| Triage recall | How many labeled issues are found and kept |
-| Plan quality | Whether plans define safe scope, verification, and rollback |
-| Patch success rate | How often LLM edit operations apply cleanly |
-| AST block rate | How often dangerous structural edits are blocked |
-| Compile/test pass rate | How often patches pass Maven verification |
-| Repair success rate | How often failed patches are fixed by the repair loop |
-| Rollback success rate | Whether task snapshots restore touched files |
+| Triage precision | LLM 保留的问题中有多少是真问题 |
+| Triage recall | 标注问题中有多少被扫描和保留 |
+| Plan quality | 计划是否明确修改范围、验证和回滚策略 |
+| Patch success rate | LLM edit operations 成功应用比例 |
+| AST block rate | AST validator 拦截危险修改的能力 |
+| Compile/test pass rate | patch 后 Maven 编译和测试通过比例 |
+| Repair success rate | 验证失败后 repair loop 修复成功比例 |
+| Rollback success rate | 任务级 snapshot 是否能恢复文件 |
 
-## Resume Summary
+## 简历描述
 
-> Built an LLM-driven Java code inspection and safe refactoring CLI for Maven repositories. The system combines JavaParser AST, Symbol Solver, static smell candidates, read-only code tools, structured LLM triage, user-reviewable refactoring plans, JSON edit operations, AST patch validation, Maven compile/test verification, JaCoCo coverage awareness, repair loops, and task-level rollback to make automated refactoring auditable and recoverable.
+> 设计并实现 LLM-driven Java 代码检查与安全重构 CLI，面向 Maven 仓库结合 JavaParser AST、Symbol Solver、静态坏味道候选、只读代码工具、LLM triage、用户可审查重构计划、JSON edit operations、AST Patch Validator、Maven 编译测试验证、JaCoCo 覆盖感知、repair loop 和任务级回滚，实现可审计、可验证、可恢复的自动化重构闭环。
 
 ## License
 
