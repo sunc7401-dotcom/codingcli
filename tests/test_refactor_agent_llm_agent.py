@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import builtins
 from pathlib import Path
 
@@ -7,7 +8,13 @@ import pytest
 
 from suncli_py.llm.models import ChatResponse, ToolCall, _Function
 from suncli_py.refactor_agent.commands import RefactorAgentError, run_apply, run_plan, run_scan
-from suncli_py.refactor_agent.llm_assistant import RefactorLlmAssistant
+from suncli_py.refactor_agent.llm_assistant import (
+    RefactorLlmAssistant,
+    RefactorLlmError,
+    _reset_sync_loop_for_tests,
+    _run_async,
+    _sync_loop_id_for_tests,
+)
 from suncli_py.refactor_agent.models import (
     CoverageAssessment,
     Evidence,
@@ -54,6 +61,26 @@ def test_llm_assistant_explains_issues_and_enhances_plan(tmp_path: Path) -> None
     assert enhanced.goal == "LLM refined goal"
     assert enhanced.planning_source == "llm-enhanced"
     assert "public API changes" in enhanced.out_of_scope
+
+
+def test_refactor_llm_sync_bridge_reuses_event_loop() -> None:
+    _reset_sync_loop_for_tests()
+    try:
+        first_loop_id = _run_async(_current_loop_id())
+        second_loop_id = _run_async(_current_loop_id())
+
+        assert first_loop_id == second_loop_id
+        assert first_loop_id == _sync_loop_id_for_tests()
+    finally:
+        _reset_sync_loop_for_tests()
+
+
+def test_llm_provider_failure_is_wrapped_as_refactor_error(tmp_path: Path) -> None:
+    source_path = _write_dead_code_java_file(tmp_path)
+    assistant = RefactorLlmAssistant(_FailingLlmClient(RuntimeError("Event loop is closed")))
+
+    with pytest.raises(RefactorLlmError, match="LLM request failed"):
+        assistant.explain_issues(tmp_path, [_dead_code_issue(source_path)])
 
 
 def test_scan_lets_llm_triage_rule_and_ast_candidates(
@@ -369,6 +396,15 @@ class _FakeLlmClient:
         return ChatResponse(role="assistant", content=response)
 
 
+class _FailingLlmClient:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def chat(self, *, messages, tools=None) -> ChatResponse:
+        del messages, tools
+        raise self.error
+
+
 class _FakePatchAssistant:
     def __init__(self, edit_plan: dict, repair_plan: dict | None = None) -> None:
         self.edit_plan = edit_plan
@@ -608,3 +644,7 @@ def _plan(
 
 def _save_plan(tmp_path: Path, plan: RefactorPlan, issue: RefactorIssue) -> None:
     RefactorAgentStorage(tmp_path).save_plan(plan, issue)
+
+
+async def _current_loop_id() -> int:
+    return id(asyncio.get_running_loop())

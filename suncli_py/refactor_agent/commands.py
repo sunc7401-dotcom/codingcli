@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from suncli_py.refactor_agent.java_ast import JavaAstError
-from suncli_py.refactor_agent.llm_assistant import RefactorLlmAssistant
+from suncli_py.refactor_agent.llm_assistant import RefactorLlmAssistant, RefactorLlmError
 from suncli_py.refactor_agent.models import (
     CharacterizationTestPlan,
     CommandResult,
@@ -48,12 +48,19 @@ def run_scan(*, output_format: str = "text", llm_assistant: RefactorLlmAssistant
             return 1
 
     scanner = JavaSmellScanner(profile.root)
+    if output_format == "text":
+        print("Scanning Java files with AST, Symbol Solver, and rule candidates...")
     try:
         issues = scanner.scan()
     except JavaAstError as err:
         raise RefactorAgentError(f"JavaParser AST 解析失败，scan 已停止: {err}") from err
     assistant = _require_llm_assistant(llm_assistant)
-    issues = assistant.triage_issues(profile.root, issues)
+    if output_format == "text":
+        print(f"Found {len(issues)} candidate issue(s). Asking LLM to triage...")
+    try:
+        issues = assistant.triage_issues(profile.root, issues)
+    except RefactorLlmError as err:
+        raise RefactorAgentError(str(err)) from err
     result = ScanResult(profile=profile, issues=issues, warnings=scanner.warnings)
     saved_path = RefactorAgentStorage(profile.root).save_scan_result(result)
 
@@ -79,7 +86,10 @@ def run_plan(*, issue_id: str, llm_assistant: RefactorLlmAssistant | None = None
 
     plan = RefactorPlanner(root).create_plan(issue)
     assistant = _require_llm_assistant(llm_assistant)
-    plan = assistant.generate_plan(root, plan, issue)
+    try:
+        plan = assistant.generate_plan(root, plan, issue)
+    except RefactorLlmError as err:
+        raise RefactorAgentError(str(err)) from err
     plan_json_path, plan_md_path = storage.save_plan(plan, issue)
 
     print(format_refactor_plan(plan, str(plan_json_path), str(plan_md_path)))
@@ -111,7 +121,10 @@ def run_apply(
     patcher = RefactorPatcher(root)
     try:
         assistant = _require_llm_assistant(llm_assistant)
-        llm_edit_plan = assistant.generate_edit_plan(plan, issue)
+        try:
+            llm_edit_plan = assistant.generate_edit_plan(plan, issue)
+        except RefactorLlmError as err:
+            raise RefactorAgentError(str(err)) from err
         if not llm_edit_plan:
             raise PatchError("LLM did not return any usable edit operation.")
         changes = patcher.generate_changes(plan, issue, llm_edit_plan=llm_edit_plan)
@@ -144,7 +157,10 @@ def run_apply(
             rollback_result = TaskRollbacker(root).rollback(task_dir, force=True)
             if rollback_result.status != "rolled_back":
                 break
-            repair_plan = assistant.generate_repair_edit_plan(root, plan, issue, verification, attempt=attempt)
+            try:
+                repair_plan = assistant.generate_repair_edit_plan(root, plan, issue, verification, attempt=attempt)
+            except RefactorLlmError as err:
+                raise RefactorAgentError(str(err)) from err
             if not repair_plan:
                 break
             changes = patcher.generate_changes(plan, issue, llm_edit_plan=repair_plan)

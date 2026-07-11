@@ -87,6 +87,31 @@ public class OrderService {
     assert "demo.Customer.score()" in score_call.resolved_signature
 
 
+def test_javaparser_supports_records(tmp_path: Path) -> None:
+    source_dir = tmp_path / "src" / "main" / "java" / "demo"
+    source_dir.mkdir(parents=True)
+    record_path = source_dir / "OrderLine.java"
+    record_path.write_text(
+        """
+package demo;
+
+public record OrderLine(String sku, int quantity, int unitPrice) {
+    public int subtotal() {
+        return quantity * unitPrice;
+    }
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    analysis = JavaParserAnalyzer(tmp_path).analyze_files([record_path])[0]
+
+    record_class = next(item for item in analysis.classes if item.name == "OrderLine")
+    subtotal = next(method for method in analysis.methods if method.name == "subtotal")
+    assert record_class.kind == "record"
+    assert subtotal.declaring_type == "demo.OrderLine"
+
+
 def test_scanner_detects_feature_envy_with_symbol_solver(tmp_path: Path) -> None:
     source_dir = tmp_path / "src" / "main" / "java" / "demo"
     source_dir.mkdir(parents=True)

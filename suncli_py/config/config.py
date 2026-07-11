@@ -143,8 +143,8 @@ class PaiCliConfig(BaseModel):
 
     @staticmethod
     def _read_from_dotenv(key: str) -> str | None:
-        """Parse ``key=value`` from ``.env`` (cwd) and ``~/.env``."""
-        env_files = [Path(".env"), Path.home() / ".env"]
+        """Parse ``key=value`` from explicit, project-local, and home ``.env`` files."""
+        env_files = PaiCliConfig._dotenv_candidates()
         for env_file in env_files:
             if not env_file.is_file():
                 continue
@@ -158,3 +158,31 @@ class PaiCliConfig(BaseModel):
             except OSError:
                 continue
         return None
+
+    @staticmethod
+    def _dotenv_candidates() -> list[Path]:
+        """Return .env lookup order without duplicates.
+
+        CLI commands are often launched from a target project instead of the
+        Python package root, so walking upward lets local development ``.env``
+        files keep working during manual testing.
+        """
+        candidates: list[Path] = []
+
+        explicit_env = os.environ.get("PAICLI_ENV_FILE", "").strip()
+        if explicit_env:
+            candidates.append(Path(explicit_env).expanduser())
+
+        cwd = Path.cwd().resolve()
+        candidates.extend(parent / ".env" for parent in (cwd, *cwd.parents))
+        candidates.append(Path.home() / ".env")
+
+        seen: set[Path] = set()
+        unique: list[Path] = []
+        for candidate in candidates:
+            resolved = candidate.resolve() if candidate.exists() else candidate.absolute()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            unique.append(candidate)
+        return unique

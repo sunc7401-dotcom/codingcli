@@ -1,6 +1,7 @@
 package suncli.refactor;
 
 import com.github.javaparser.StaticJavaParser;
+import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.Node;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
@@ -280,7 +281,9 @@ public final class JavaAstDump {
         for (Path sourceRoot : sourceRoots) {
             typeSolver.add(new JavaParserTypeSolver(sourceRoot));
         }
-        StaticJavaParser.getParserConfiguration().setSymbolResolver(new JavaSymbolSolver(typeSolver));
+        StaticJavaParser.getParserConfiguration()
+                .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_17)
+                .setSymbolResolver(new JavaSymbolSolver(typeSolver));
     }
 
     private static boolean isJavaSourceRoot(Path path) {

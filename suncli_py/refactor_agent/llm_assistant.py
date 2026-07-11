@@ -259,7 +259,10 @@ class RefactorLlmAssistant:
         messages = [Message.system(system), Message.user(user)]
         schemas = tools.schemas() if tools is not None else None
         for _ in range(max_tool_rounds + 1):
-            response = _run_async(self.client.chat(messages=messages, tools=schemas))
+            try:
+                response = _run_async(self.client.chat(messages=messages, tools=schemas))
+            except (OSError, RuntimeError) as err:
+                raise RefactorLlmError(f"LLM request failed: {err}") from err
             if not response:
                 return {}
             if response.has_tool_calls() and tools is not None:
@@ -282,12 +285,44 @@ class RefactorLlmAssistant:
         return {}
 
 
+class RefactorLlmError(Exception):
+    """Raised when the LLM provider call fails."""
+
+
+_SYNC_LOOP: asyncio.AbstractEventLoop | None = None
+
+
 def _run_async(coro: Any) -> Any:
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
-    return loop.run_until_complete(coro)
+        return _run_on_sync_loop(coro)
+    close = getattr(coro, "close", None)
+    if callable(close):
+        close()
+    raise RuntimeError("Cannot run synchronous refactor-agent LLM call inside an active asyncio event loop.")
+
+
+def _run_on_sync_loop(coro: Any) -> Any:
+    global _SYNC_LOOP
+    if _SYNC_LOOP is None or _SYNC_LOOP.is_closed():
+        _SYNC_LOOP = asyncio.new_event_loop()
+    return _SYNC_LOOP.run_until_complete(coro)
+
+
+def _close_sync_loop_for_tests() -> None:
+    global _SYNC_LOOP
+    if _SYNC_LOOP is not None and not _SYNC_LOOP.is_closed():
+        _SYNC_LOOP.close()
+    _SYNC_LOOP = None
+
+
+def _sync_loop_id_for_tests() -> int | None:
+    return id(_SYNC_LOOP) if _SYNC_LOOP is not None and not _SYNC_LOOP.is_closed() else None
+
+
+def _reset_sync_loop_for_tests() -> None:
+    _close_sync_loop_for_tests()
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:
