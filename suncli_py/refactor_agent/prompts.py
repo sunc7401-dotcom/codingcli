@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 BASE_AGENT_RULES = """
 You are the decision core of a Java safe refactoring agent.
 
@@ -26,8 +25,12 @@ def triage_system_prompt() -> str:
         "You are triaging candidate code smells from static rules and AST analysis.\n"
         "The scanner only provides candidates, not final truth.\n"
         "Use get_issue_context, read_file, and search_code when you need more evidence.\n"
-        "Decide whether each candidate is real, its priority, severity, risk, automation suitability, "
-        "impact, recommendation, and refactoring strategy.\n"
+        "You are the final semantic decision-maker, not a formatter for scanner output.\n"
+        "For the candidate, return accept, reject, or uncertain. Accept only when concrete source evidence "
+        "shows a worthwhile problem; reject false positives; use uncertain when repository evidence is insufficient.\n"
+        "Before accepting or rejecting, inspect the target source and inspect references/callers or tests when the "
+        "decision depends on them. Cite repository file paths and line ranges in source_evidence.\n"
+        "For accepted candidates decide severity, risk, automation suitability, impact, recommendation, and strategy.\n"
         "Return the requested JSON only after tool use is complete."
     )
 

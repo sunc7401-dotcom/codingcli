@@ -17,6 +17,7 @@ from suncli_py.refactor_agent.llm_assistant import (
 )
 from suncli_py.refactor_agent.models import (
     CoverageAssessment,
+    DecisionStatus,
     Evidence,
     JavaContext,
     ProjectProfile,
@@ -116,6 +117,42 @@ def test_scan_lets_llm_triage_rule_and_ast_candidates(
     assert issue.risk_level == RiskLevel.MEDIUM
     assert issue.impact == "LLM decided the method is too hard to safely maintain"
     assert any(evidence.message == "LLM triage decision" for evidence in issue.evidence)
+
+
+def test_llm_triage_rejects_false_positive_after_source_review(tmp_path: Path) -> None:
+    source_path = _write_dead_code_java_file(tmp_path)
+    assistant = RefactorLlmAssistant(
+        _FakeLlmClient(
+            [
+                (
+                    '{"candidate_id":"RA-0001","decision":"reject","confidence":0.92,'
+                    '"reason":"The private method is invoked reflectively by a framework registration",'
+                    '"source_evidence":[{"file_path":"src/main/java/demo/OrderService.java",'
+                    '"start_line":4,"end_line":6,"reason":"Framework entry point"}]}'
+                )
+            ]
+        )
+    )
+
+    result = assistant.triage_issues(tmp_path, [_dead_code_issue(source_path)])
+
+    assert result.issues == []
+    assert result.decisions[0].status == DecisionStatus.REJECT
+    assert result.decisions[0].confidence == pytest.approx(0.92)
+
+
+def test_llm_triage_requires_evidence_before_accepting_candidate(tmp_path: Path) -> None:
+    source_path = _write_dead_code_java_file(tmp_path)
+    assistant = RefactorLlmAssistant(
+        _FakeLlmClient(
+            ['{"candidate_id":"RA-0001","decision":"accept","confidence":0.8,"reason":"Looks unused"}']
+        )
+    )
+
+    result = assistant.triage_issues(tmp_path, [_dead_code_issue(source_path)])
+
+    assert result.issues == []
+    assert result.decisions[0].status == DecisionStatus.UNCERTAIN
 
 
 def test_plan_is_generated_by_llm_from_tool_context(

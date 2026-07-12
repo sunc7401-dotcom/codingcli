@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from suncli_py.refactor_agent.models import (
+    CandidateDecision,
     CharacterizationTestPlan,
     RefactorIssue,
     RefactorPlan,
@@ -25,6 +26,24 @@ class RefactorAgentStorage:
         output_path = self.base_dir / "issues.json"
         output_path.write_text(json.dumps(result.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         return output_path
+
+    def save_scan_audit(
+        self,
+        candidates: list[RefactorIssue],
+        decisions: list[CandidateDecision],
+    ) -> tuple[Path, Path]:
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        candidates_path = self.base_dir / "candidates.json"
+        decisions_path = self.base_dir / "decisions.json"
+        candidates_path.write_text(
+            json.dumps([candidate.to_dict() for candidate in candidates], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        decisions_path.write_text(
+            json.dumps([decision.to_dict() for decision in decisions], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return candidates_path, decisions_path
 
     def load_scan_result(self) -> ScanResult:
         input_path = self.base_dir / "issues.json"

@@ -13,12 +13,15 @@ from suncli_py.llm.client import LlmClient
 from suncli_py.llm.factory import create_client_from_config
 from suncli_py.llm.models import Message
 from suncli_py.refactor_agent.models import (
+    CandidateDecision,
+    DecisionStatus,
     Evidence,
     RefactoringType,
     RefactorIssue,
     RefactorPlan,
     RiskLevel,
     Severity,
+    TriageResult,
     VerificationResult,
 )
 from suncli_py.refactor_agent.prompts import (
@@ -48,7 +51,91 @@ class RefactorLlmAssistant:
         client = create_client_from_config(PaiCliConfig.load())
         return cls(client) if client else None
 
-    def triage_issues(self, root: Path, issues: list[RefactorIssue], *, limit: int = 20) -> list[RefactorIssue]:
+    def triage_issues(self, root: Path, issues: list[RefactorIssue], *, limit: int = 20) -> TriageResult:
+        """Investigate candidates individually and accept, reject, or defer them."""
+        if not issues:
+            return TriageResult(issues=[], decisions=[])
+
+        toolbox = RefactorAgentToolbox(root)
+        tools = RefactorAgentToolRuntime(toolbox, issues=issues)
+        decisions: list[CandidateDecision] = []
+        ranked: list[tuple[int, RefactorIssue]] = []
+        for index, issue in enumerate(issues):
+            if index >= limit:
+                decisions.append(
+                    CandidateDecision(
+                        candidate_id=issue.id,
+                        status=DecisionStatus.UNCERTAIN,
+                        confidence=0.0,
+                        reason=f"Candidate was not investigated because the scan limit is {limit}.",
+                    )
+                )
+                continue
+
+            data = self._chat_json(
+                system=triage_system_prompt(),
+                user=(
+                    "Investigate this single scanner candidate and make the final semantic decision. Return JSON: "
+                    '{"candidate_id":"RA-0001","decision":"accept|reject|uncertain",'
+                    '"confidence":0.0,"priority":1,"reason":"...","root_cause":"...",'
+                    '"source_evidence":[{"file_path":"...","start_line":1,"end_line":2,"reason":"..."}],'
+                    '"severity":"low|medium|high","risk_level":"low|medium|high",'
+                    '"suggested_refactoring":"Extract Method|Extract Class|Introduce Explaining Variable|'
+                    'Move Method|Replace Duplicate Logic With Shared Method|Remove Dead Code|'
+                    'Rename Variable / Method / Class","auto_applicable":false,"requires_review":true,'
+                    '"impact":"...","recommendation":"...","proposed_solution":"...",'
+                    '"verification_strategy":["..."]}. '
+                    "Do not accept a candidate without concrete source_evidence.\n"
+                    + toolbox.as_json(toolbox.issue_context(issue))
+                ),
+                tools=tools,
+            )
+            decision = _candidate_decision(root, issue, data)
+            decisions.append(decision)
+            if decision.status != DecisionStatus.ACCEPT:
+                continue
+
+            priority = _int_value(data.get("priority"), index + 1)
+            ranked.append(
+                (
+                    priority,
+                    replace(
+                        issue,
+                        severity=_enum_value(Severity, data.get("severity"), issue.severity),
+                        risk_level=_enum_value(RiskLevel, data.get("risk_level"), issue.risk_level),
+                        suggested_refactoring=_enum_value(
+                            RefactoringType, data.get("suggested_refactoring"), issue.suggested_refactoring
+                        ),
+                        auto_applicable=bool(data.get("auto_applicable", issue.auto_applicable)),
+                        requires_review=bool(data.get("requires_review", issue.requires_review)),
+                        impact=str(data.get("impact") or issue.impact),
+                        recommendation=str(
+                            data.get("recommendation") or decision.proposed_solution or issue.recommendation
+                        ),
+                        evidence=[
+                            *issue.evidence,
+                            Evidence(
+                                "LLM triage decision",
+                                {
+                                    "decision": decision.status.value,
+                                    "confidence": decision.confidence,
+                                    "priority": priority,
+                                    "reason": decision.reason,
+                                    "root_cause": decision.root_cause,
+                                    "source_evidence": decision.source_evidence,
+                                    "verification_strategy": decision.verification_strategy,
+                                },
+                            ),
+                        ],
+                    ),
+                )
+            )
+        return TriageResult(
+            issues=[issue for _, issue in sorted(ranked, key=lambda item: item[0])],
+            decisions=decisions,
+        )
+
+    def _legacy_triage_issues(self, root: Path, issues: list[RefactorIssue], *, limit: int = 20) -> list[RefactorIssue]:
         """Let the LLM decide which rule/AST candidates are worth fixing."""
         if not issues:
             return []
@@ -374,3 +461,65 @@ def _int_value(value: Any, fallback: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def _candidate_decision(root: Path, issue: RefactorIssue, data: dict[str, Any]) -> CandidateDecision:
+    status = _enum_value(DecisionStatus, data.get("decision"), DecisionStatus.UNCERTAIN)
+    reason = str(data.get("reason") or "").strip()
+    raw_evidence = data.get("source_evidence")
+    source_evidence = _validated_source_evidence(root, raw_evidence)
+    if status in {DecisionStatus.ACCEPT, DecisionStatus.REJECT} and (not reason or not source_evidence):
+        status = DecisionStatus.UNCERTAIN
+        reason = reason or "The model did not provide enough repository evidence for a final decision."
+    try:
+        confidence = min(1.0, max(0.0, float(data.get("confidence", 0.0))))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return CandidateDecision(
+        candidate_id=issue.id,
+        status=status,
+        confidence=confidence,
+        reason=reason or "The model returned no supported decision.",
+        source_evidence=source_evidence,
+        root_cause=str(data.get("root_cause") or "").strip(),
+        proposed_solution=str(data.get("proposed_solution") or data.get("recommendation") or "").strip(),
+        verification_strategy=[
+            str(item).strip()
+            for item in data.get("verification_strategy", [])
+            if str(item).strip()
+        ]
+        if isinstance(data.get("verification_strategy"), list)
+        else [],
+    )
+
+
+def _validated_source_evidence(root: Path, value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    validated: list[dict[str, Any]] = []
+    resolved_root = root.resolve()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        file_path = str(item.get("file_path") or "").replace("\\", "/").lstrip("/")
+        try:
+            path = (resolved_root / file_path).resolve()
+            path.relative_to(resolved_root)
+            start_line = int(item.get("start_line", 0))
+            end_line = int(item.get("end_line", start_line))
+        except (OSError, TypeError, ValueError):
+            continue
+        if not path.is_file() or start_line < 1 or end_line < start_line:
+            continue
+        line_count = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
+        if end_line > line_count:
+            continue
+        validated.append(
+            {
+                "file_path": file_path,
+                "start_line": start_line,
+                "end_line": end_line,
+                "reason": str(item.get("reason") or "").strip(),
+            }
+        )
+    return validated

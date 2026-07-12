@@ -88,6 +88,12 @@ class RefactoringType(StrEnum):
     RENAME = "Rename Variable / Method / Class"
 
 
+class DecisionStatus(StrEnum):
+    ACCEPT = "accept"
+    REJECT = "reject"
+    UNCERTAIN = "uncertain"
+
+
 @dataclass(frozen=True)
 class Evidence:
     message: str
@@ -135,6 +141,40 @@ class RefactorIssue:
             risk_level=RiskLevel(data["risk_level"]),
             requires_review=bool(data["requires_review"]),
         )
+
+
+@dataclass(frozen=True)
+class CandidateDecision:
+    candidate_id: str
+    status: DecisionStatus
+    confidence: float
+    reason: str
+    source_evidence: list[dict[str, Any]] = field(default_factory=list)
+    root_cause: str = ""
+    proposed_solution: str = ""
+    verification_strategy: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CandidateDecision:
+        return cls(
+            candidate_id=str(data["candidate_id"]),
+            status=DecisionStatus(data["status"]),
+            confidence=float(data.get("confidence", 0.0)),
+            reason=str(data.get("reason", "")),
+            source_evidence=[dict(item) for item in data.get("source_evidence", [])],
+            root_cause=str(data.get("root_cause", "")),
+            proposed_solution=str(data.get("proposed_solution", "")),
+            verification_strategy=[str(item) for item in data.get("verification_strategy", [])],
+        )
+
+
+@dataclass(frozen=True)
+class TriageResult:
+    issues: list[RefactorIssue]
+    decisions: list[CandidateDecision]
 
 
 @dataclass(frozen=True)

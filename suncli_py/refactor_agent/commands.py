@@ -18,6 +18,7 @@ from suncli_py.refactor_agent.models import (
     RefactorPlan,
     RiskLevel,
     ScanResult,
+    TriageResult,
 )
 from suncli_py.refactor_agent.patcher import PatchError, RefactorPatcher
 from suncli_py.refactor_agent.planner import RefactorPlanner
@@ -82,11 +83,21 @@ def run_scan(*, output_format: str = "text", llm_assistant: RefactorLlmAssistant
     if output_format == "text":
         print(f"Found {len(issues)} candidate issue(s). Asking LLM to triage...")
     try:
-        issues = assistant.triage_issues(profile.root, issues)
+        candidates = issues
+        triage = assistant.triage_issues(profile.root, candidates)
     except RefactorLlmError as err:
         raise RefactorAgentError(str(err)) from err
+    if isinstance(triage, TriageResult):
+        issues = triage.issues
+        decisions = triage.decisions
+    else:
+        # Compatibility for injected assistants that still implement the old API.
+        issues = triage
+        decisions = []
     result = ScanResult(profile=profile, issues=issues, warnings=scanner.warnings)
-    saved_path = RefactorAgentStorage(profile.root).save_scan_result(result)
+    storage = RefactorAgentStorage(profile.root)
+    saved_path = storage.save_scan_result(result)
+    storage.save_scan_audit(candidates, decisions)
 
     if output_format == "json":
         print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
@@ -94,6 +105,11 @@ def run_scan(*, output_format: str = "text", llm_assistant: RefactorLlmAssistant
         print(format_project_profile(profile))
         print()
         print(format_scan_issues(issues, scanner.warnings, str(saved_path)))
+        if decisions:
+            accepted = sum(decision.status.value == "accept" for decision in decisions)
+            rejected = sum(decision.status.value == "reject" for decision in decisions)
+            uncertain = sum(decision.status.value == "uncertain" for decision in decisions)
+            print(f"Agent decisions: accepted={accepted}, rejected={rejected}, uncertain={uncertain}")
     return 0
 
 
