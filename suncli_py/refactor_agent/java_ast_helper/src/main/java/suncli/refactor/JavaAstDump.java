@@ -7,12 +7,21 @@ import com.github.javaparser.ast.Node;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.EnumDeclaration;
+import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.RecordDeclaration;
 import com.github.javaparser.ast.expr.FieldAccessExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.nodeTypes.NodeWithSimpleName;
+import com.github.javaparser.ast.stmt.CatchClause;
+import com.github.javaparser.ast.stmt.ForEachStmt;
+import com.github.javaparser.ast.stmt.ForStmt;
+import com.github.javaparser.ast.stmt.IfStmt;
+import com.github.javaparser.ast.stmt.SwitchEntry;
+import com.github.javaparser.ast.stmt.SwitchStmt;
+import com.github.javaparser.ast.stmt.TryStmt;
+import com.github.javaparser.ast.stmt.WhileStmt;
 import com.github.javaparser.resolution.declarations.ResolvedFieldDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedMethodDeclaration;
 import com.github.javaparser.resolution.declarations.ResolvedValueDeclaration;
@@ -111,6 +120,12 @@ public final class JavaAstDump {
         number(out, "end_line", endLine(node));
         out.append(',');
         field(out, "kind", classKind(node));
+        out.append(',');
+        number(out, "field_count", fieldCount(node));
+        out.append(',');
+        number(out, "method_count", methodCount(node));
+        out.append(',');
+        number(out, "public_method_count", publicMethodCount(node));
         out.append('}');
     }
 
@@ -132,7 +147,13 @@ public final class JavaAstDump {
         out.append(',');
         bool(out, "is_private", isPrivate(node));
         out.append(',');
+        bool(out, "is_public", isPublic(node));
+        out.append(',');
         bool(out, "is_static", isStatic(node));
+        out.append(',');
+        number(out, "branch_count", branchCount(node));
+        out.append(',');
+        number(out, "max_control_nesting", maxControlNesting(node));
         out.append('}');
     }
 
@@ -191,6 +212,31 @@ public final class JavaAstDump {
             return "record";
         }
         return "class";
+    }
+
+    private static int fieldCount(Node node) {
+        int declaredVariables = node.getChildNodes().stream()
+                .filter(FieldDeclaration.class::isInstance)
+                .map(FieldDeclaration.class::cast)
+                .mapToInt(field -> field.getVariables().size())
+                .sum();
+        if (node instanceof RecordDeclaration declaration) {
+            return declaredVariables + declaration.getParameters().size();
+        }
+        return declaredVariables;
+    }
+
+    private static int methodCount(Node node) {
+        return (int) node.getChildNodes().stream()
+                .filter(child -> child instanceof MethodDeclaration || child instanceof ConstructorDeclaration)
+                .count();
+    }
+
+    private static int publicMethodCount(Node node) {
+        return (int) node.getChildNodes().stream()
+                .filter(child -> child instanceof MethodDeclaration || child instanceof ConstructorDeclaration)
+                .filter(JavaAstDump::isPublic)
+                .count();
     }
 
     private static String signature(Node node) {
@@ -260,11 +306,76 @@ public final class JavaAstDump {
         return false;
     }
 
+    private static boolean isPublic(Node node) {
+        if (node instanceof MethodDeclaration declaration) {
+            return declaration.isPublic()
+                    || (!declaration.isPrivate()
+                            && declaration.findAncestor(ClassOrInterfaceDeclaration.class)
+                                    .map(ClassOrInterfaceDeclaration::isInterface)
+                                    .orElse(false));
+        }
+        if (node instanceof ConstructorDeclaration declaration) {
+            return declaration.isPublic();
+        }
+        return false;
+    }
+
     private static boolean isStatic(Node node) {
         if (node instanceof MethodDeclaration declaration) {
             return declaration.isStatic();
         }
         return false;
+    }
+
+    private static int branchCount(Node callable) {
+        return (int) callable.findAll(Node.class).stream()
+                .filter(node -> belongsToCallable(node, callable))
+                .filter(node -> node instanceof IfStmt
+                        || node instanceof SwitchStmt
+                        || node instanceof SwitchEntry
+                        || node instanceof ForStmt
+                        || node instanceof ForEachStmt
+                        || node instanceof WhileStmt
+                        || node instanceof CatchClause)
+                .count();
+    }
+
+    private static int maxControlNesting(Node callable) {
+        return callable.findAll(Node.class).stream()
+                .filter(node -> belongsToCallable(node, callable))
+                .filter(JavaAstDump::isNestingControlNode)
+                .mapToInt(node -> controlDepth(node, callable))
+                .max()
+                .orElse(0);
+    }
+
+    private static int controlDepth(Node node, Node callable) {
+        int depth = 1;
+        Node ancestor = node.getParentNode().orElse(null);
+        while (ancestor != null && ancestor != callable) {
+            if (isNestingControlNode(ancestor)) {
+                depth++;
+            }
+            ancestor = ancestor.getParentNode().orElse(null);
+        }
+        return depth;
+    }
+
+    private static boolean isNestingControlNode(Node node) {
+        return node instanceof IfStmt
+                || node instanceof ForStmt
+                || node instanceof ForEachStmt
+                || node instanceof WhileStmt
+                || node instanceof SwitchStmt
+                || node instanceof TryStmt
+                || node instanceof CatchClause;
+    }
+
+    private static boolean belongsToCallable(Node node, Node callable) {
+        return node == callable || node.findAncestor(MethodDeclaration.class).map(ancestor -> ancestor == callable)
+                .orElseGet(() -> node.findAncestor(ConstructorDeclaration.class)
+                        .map(ancestor -> ancestor == callable)
+                        .orElse(false));
     }
 
     private static void configureSymbolSolver(Path root) throws IOException {

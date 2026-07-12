@@ -109,7 +109,91 @@ public record OrderLine(String sku, int quantity, int unitPrice) {
     record_class = next(item for item in analysis.classes if item.name == "OrderLine")
     subtotal = next(method for method in analysis.methods if method.name == "subtotal")
     assert record_class.kind == "record"
+    assert record_class.field_count == 3
+    assert record_class.method_count == 1
+    assert record_class.public_method_count == 1
     assert subtotal.declaring_type == "demo.OrderLine"
+
+
+def test_javaparser_counts_direct_class_members_from_ast(tmp_path: Path) -> None:
+    source_dir = tmp_path / "src" / "main" / "java" / "demo"
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "MemberCounts.java"
+    source_path.write_text(
+        """
+package demo;
+
+public class MemberCounts {
+    private int first, second;
+    private final String value = String.valueOf(1);
+
+    public MemberCounts() {}
+    public void visible() {}
+    private void hidden() {}
+
+    static class Nested {
+        int nestedField;
+        public void nestedMethod() {}
+    }
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    analysis = JavaParserAnalyzer(tmp_path).analyze_files([source_path])[0]
+
+    outer = next(item for item in analysis.classes if item.name == "MemberCounts")
+    nested = next(item for item in analysis.classes if item.name == "Nested")
+    assert (outer.field_count, outer.method_count, outer.public_method_count) == (3, 3, 2)
+    assert (nested.field_count, nested.method_count, nested.public_method_count) == (1, 1, 1)
+
+
+def test_scanner_uses_ast_class_metrics_instead_of_source_regex(tmp_path: Path) -> None:
+    source_dir = tmp_path / "src" / "main" / "java" / "demo"
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "ManyFields.java"
+    declarations = "\n".join(
+        f"    private final String field{index} = String.valueOf({index});" for index in range(21)
+    )
+    source_path.write_text(
+        f"package demo;\npublic class ManyFields {{\n{declarations}\n}}\n",
+        encoding="utf-8",
+    )
+
+    issues = JavaSmellScanner(tmp_path, command_runner=_pmd_runner).scan()
+
+    large_class = next(issue for issue in issues if issue.type == SmellType.LARGE_CLASS)
+    assert large_class.evidence[0].metrics["fields"] == 21
+
+
+def test_javaparser_calculates_control_flow_metrics_from_ast(tmp_path: Path) -> None:
+    source_dir = tmp_path / "src" / "main" / "java" / "demo"
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / "ControlFlow.java"
+    source_path.write_text(
+        """
+package demo;
+
+public class ControlFlow {
+    public void inspect(int value) {
+        if (value > 0) { // } misleading brace in a comment
+            for (int index = 0; index < value; index++) {
+                while (value-- > index) {
+                    System.out.println("if (fake) { }");
+                }
+            }
+        }
+    }
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    analysis = JavaParserAnalyzer(tmp_path).analyze_files([source_path])[0]
+
+    method = next(item for item in analysis.methods if item.name == "inspect")
+    assert method.branch_count == 3
+    assert method.max_control_nesting == 3
 
 
 def test_scanner_detects_feature_envy_with_symbol_solver(tmp_path: Path) -> None:

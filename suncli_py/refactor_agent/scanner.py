@@ -44,7 +44,10 @@ class JavaMethod:
     resolved_signature: str
     symbol_resolved: bool
     is_private: bool
+    is_public: bool
     is_static: bool
+    branch_count: int
+    max_control_nesting: int
     method_calls: list[AstMethodCall]
     field_accesses: list[AstFieldAccess]
 
@@ -56,6 +59,9 @@ class JavaClass:
     end_line: int
     body_lines: list[str]
     kind: str
+    field_count: int
+    method_count: int
+    public_method_count: int
 
 
 @dataclass(frozen=True)
@@ -164,7 +170,10 @@ class JavaSmellScanner:
                 resolved_signature=method.resolved_signature,
                 symbol_resolved=method.symbol_resolved,
                 is_private=method.is_private,
+                is_public=method.is_public,
                 is_static=method.is_static,
+                branch_count=method.branch_count,
+                max_control_nesting=method.max_control_nesting,
                 method_calls=[
                     call
                     for call in ast_analysis.method_calls
@@ -185,6 +194,9 @@ class JavaSmellScanner:
                 end_line=class_info.end_line,
                 body_lines=sanitized[class_info.start_line - 1 : class_info.end_line],
                 kind=class_info.kind,
+                field_count=class_info.field_count,
+                method_count=class_info.method_count,
+                public_method_count=class_info.public_method_count,
             )
             for class_info in ast_analysis.classes
         ]
@@ -202,8 +214,8 @@ class JavaSmellScanner:
         for analysis in analyses:
             for method in analysis.methods:
                 line_count = method.end_line - method.start_line + 1
-                branch_count = _count_branches(method.body_lines)
-                nesting_depth = _max_control_nesting(method.body_lines)
+                branch_count = method.branch_count
+                nesting_depth = method.max_control_nesting
                 if line_count <= 80 and branch_count <= 12 and nesting_depth <= 4:
                     continue
 
@@ -240,21 +252,18 @@ class JavaSmellScanner:
         issues: list[RefactorIssue] = []
         for analysis in analyses:
             for class_info in analysis.classes:
-                class_methods = [
-                    method
-                    for method in analysis.methods
-                    if class_info.start_line <= method.start_line <= class_info.end_line
-                ]
-                body = class_info.body_lines
                 loc = class_info.end_line - class_info.start_line + 1
-                field_count = _count_fields(body)
-                public_method_count = sum(1 for method in class_methods if " public " in f" {method.signature} ")
-                if loc <= 500 and len(class_methods) <= 20 and field_count <= 20 and public_method_count <= 15:
+                if (
+                    loc <= 500
+                    and class_info.method_count <= 20
+                    and class_info.field_count <= 20
+                    and class_info.public_method_count <= 15
+                ):
                     continue
 
                 severity = (
                     Severity.HIGH
-                    if loc > 1000 or len(class_methods) > 40 or field_count > 40
+                    if loc > 1000 or class_info.method_count > 40 or class_info.field_count > 40
                     else Severity.MEDIUM
                 )
                 issues.append(
@@ -270,9 +279,9 @@ class JavaSmellScanner:
                                 "类的规模或成员数量超过阈值。",
                                 {
                                     "lines": loc,
-                                    "methods": len(class_methods),
-                                    "fields": field_count,
-                                    "public_methods": public_method_count,
+                                    "methods": class_info.method_count,
+                                    "fields": class_info.field_count,
+                                    "public_methods": class_info.public_method_count,
                                 },
                             )
                         ],
@@ -291,7 +300,7 @@ class JavaSmellScanner:
         condition_pattern = re.compile(r"\b(if|while|for)\s*\((.*)\)")
         for analysis in analyses:
             for method in analysis.methods:
-                nesting_depth = _max_control_nesting(method.body_lines)
+                nesting_depth = method.max_control_nesting
                 if nesting_depth > 4:
                     issues.append(
                         _issue(
@@ -680,45 +689,6 @@ def _strip_comments_and_strings(lines: list[str]) -> list[str]:
             index += 1
         sanitized.append("".join(output))
     return sanitized
-
-
-def _count_branches(lines: list[str]) -> int:
-    return sum(len(re.findall(r"\b(if|else\s+if|switch|case|for|while|catch)\b", line)) for line in lines)
-
-
-def _max_control_nesting(lines: list[str]) -> int:
-    depth = 0
-    max_depth = 0
-    control_stack: list[int] = []
-    control_pattern = re.compile(r"\b(if|else\s+if|else|for|while|switch|try|catch)\b")
-    for line in lines:
-        stripped = line.strip()
-        closing = stripped.count("}")
-        if closing:
-            depth = max(0, depth - closing)
-            control_stack = [item for item in control_stack if item <= depth]
-        if control_pattern.search(stripped):
-            max_depth = max(max_depth, depth + 1)
-            control_stack.append(depth + 1)
-        opening = stripped.count("{")
-        if opening:
-            depth += opening
-    return max_depth
-
-
-def _count_fields(lines: list[str]) -> int:
-    count = 0
-    field_pattern = re.compile(
-        r"^\s*(?:private|protected|public)?\s*(?:static\s+)?(?:final\s+)?[A-Za-z_][A-Za-z0-9_<>\[\], ?]*\s+"
-        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:=|;)"
-    )
-    for line in lines:
-        stripped = line.strip()
-        if "(" in stripped or stripped.startswith(("@", "//")):
-            continue
-        if field_pattern.search(line):
-            count += 1
-    return count
 
 
 def _normalize_duplicate_line(line: str) -> str:

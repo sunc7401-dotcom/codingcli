@@ -26,7 +26,10 @@ class AstMethod:
     resolved_signature: str
     symbol_resolved: bool
     is_private: bool
+    is_public: bool
     is_static: bool
+    branch_count: int
+    max_control_nesting: int
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,9 @@ class AstClass:
     start_line: int
     end_line: int
     kind: str
+    field_count: int
+    method_count: int
+    public_method_count: int
 
 
 @dataclass(frozen=True)
@@ -143,7 +149,10 @@ def _ast_file_from_dict(data: dict, root: Path) -> AstFileAnalysis:
                 resolved_signature=item.get("resolved_signature", ""),
                 symbol_resolved=bool(item.get("symbol_resolved", False)),
                 is_private=bool(item.get("is_private", False)),
+                is_public=bool(item.get("is_public", False)),
                 is_static=bool(item.get("is_static", False)),
+                branch_count=int(item.get("branch_count", 0)),
+                max_control_nesting=int(item.get("max_control_nesting", 0)),
             )
             for item in data.get("methods", [])
         ],
@@ -153,6 +162,9 @@ def _ast_file_from_dict(data: dict, root: Path) -> AstFileAnalysis:
                 start_line=int(item["start_line"]),
                 end_line=int(item["end_line"]),
                 kind=item.get("kind", "class"),
+                field_count=int(item.get("field_count", 0)),
+                method_count=int(item.get("method_count", 0)),
+                public_method_count=int(item.get("public_method_count", 0)),
             )
             for item in data.get("classes", [])
         ],
