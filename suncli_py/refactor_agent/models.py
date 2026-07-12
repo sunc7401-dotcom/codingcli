@@ -28,6 +28,7 @@ class ProjectProfile:
     has_main_java: bool
     has_test_java: bool
     is_git_clean: bool
+    has_pmd_cpd_plugin: bool = False
     maven_version: str | None = None
     java_version: str | None = None
     modules: list[MavenModule] = field(default_factory=list)
@@ -47,6 +48,7 @@ class ProjectProfile:
             has_main_java=bool(data["has_main_java"]),
             has_test_java=bool(data["has_test_java"]),
             is_git_clean=bool(data["is_git_clean"]),
+            has_pmd_cpd_plugin=bool(data.get("has_pmd_cpd_plugin", False)),
             maven_version=data.get("maven_version"),
             java_version=data.get("java_version"),
             modules=[MavenModule(**module) for module in data.get("modules", [])],

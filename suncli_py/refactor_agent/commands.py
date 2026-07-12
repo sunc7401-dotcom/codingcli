@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from suncli_py.refactor_agent.planner import RefactorPlanner
 from suncli_py.refactor_agent.project_detector import ProjectDetector
 from suncli_py.refactor_agent.report import ReportGenerator
 from suncli_py.refactor_agent.rollback import RollbackError, TaskRollbacker
-from suncli_py.refactor_agent.scanner import JavaSmellScanner
+from suncli_py.refactor_agent.scanner import CpdError, JavaSmellScanner
 from suncli_py.refactor_agent.storage import RefactorAgentStorage
 from suncli_py.refactor_agent.test_generator import CharacterizationTestGenerator
 from suncli_py.refactor_agent.verifier import CommandRunner, VerificationPipeline, default_command_runner
@@ -34,7 +35,8 @@ class RefactorAgentError(Exception):
 
 
 def run_scan(*, output_format: str = "text", llm_assistant: RefactorLlmAssistant | None = None) -> int:
-    profile = ProjectDetector(".").detect()
+    detector = ProjectDetector(".")
+    profile = detector.detect()
 
     if not profile.is_git_repo:
         raise RefactorAgentError("当前目录不是 Git 仓库：未发现 .git，且 git rev-parse 检测失败。")
@@ -42,10 +44,30 @@ def run_scan(*, output_format: str = "text", llm_assistant: RefactorLlmAssistant
         raise RefactorAgentError("当前目录不是 Maven 项目：未发现 pom.xml。")
 
     if not profile.is_git_clean and output_format == "text" and sys.stdin.isatty():
-        answer = input("Git 工作区不干净，scan 不会写文件。是否继续？[y/N] ").strip().lower()
+        answer = input(
+            "Git 工作区不干净；除经确认安装必需插件外，scan 不会写文件。是否继续？[y/N] "
+        ).strip().lower()
         if answer not in {"y", "yes"}:
             print("已取消 scan。")
             return 1
+
+    if not profile.has_pmd_cpd_plugin:
+        if output_format != "text" or not sys.stdin.isatty():
+            raise RefactorAgentError(
+                "目标项目未配置 org.apache.maven.plugins:maven-pmd-plugin；"
+                "请在交互式终端运行 scan 并确认安装。"
+            )
+        answer = input(
+            "目标项目未配置 Maven PMD Plugin（CPD 必需），是否安装到 pom.xml？[y/N] "
+        ).strip().lower()
+        if answer not in {"y", "yes"}:
+            print("已取消 scan：重复代码检测只支持 PMD CPD。")
+            return 1
+        try:
+            detector.install_pmd_cpd_plugin()
+        except (ET.ParseError, OSError, ValueError) as err:
+            raise RefactorAgentError(f"安装 Maven PMD Plugin 失败: {err}") from err
+        profile = detector.detect()
 
     scanner = JavaSmellScanner(profile.root)
     if output_format == "text":
@@ -54,6 +76,8 @@ def run_scan(*, output_format: str = "text", llm_assistant: RefactorLlmAssistant
         issues = scanner.scan()
     except JavaAstError as err:
         raise RefactorAgentError(f"JavaParser AST 解析失败，scan 已停止: {err}") from err
+    except CpdError as err:
+        raise RefactorAgentError(f"PMD CPD 检测失败，scan 已停止: {err}") from err
     assistant = _require_llm_assistant(llm_assistant)
     if output_format == "text":
         print(f"Found {len(issues)} candidate issue(s). Asking LLM to triage...")

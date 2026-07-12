@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
-from collections import Counter, defaultdict
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +31,10 @@ IGNORED_DIRS = {".git", ".paicli", "target", "build", ".gradle", "node_modules"}
 UNCLEAR_LOCAL_NAMES = {"tmp", "temp", "data", "obj", "x", "y", "z", "foo", "bar"}
 UNCLEAR_METHOD_NAMES = {"handle", "process", "doIt", "doit", "run", "execute"}
 UNCLEAR_CLASS_SUFFIXES = ("Manager", "Helper", "Util")
+
+
+class CpdError(Exception):
+    """Raised when the required PMD CPD scan cannot complete."""
 
 
 @dataclass(frozen=True)
@@ -542,75 +546,21 @@ class JavaSmellScanner:
         return issues
 
     def _scan_duplicate_code(self, analyses: list[JavaFileAnalysis]) -> list[RefactorIssue]:
-        issues = self._scan_duplicate_code_with_cpd()
-        if issues:
-            return issues
-
-        windows: dict[tuple[str, ...], list[tuple[JavaFileAnalysis, int]]] = defaultdict(list)
-        window_size = 6
-        for analysis in analyses:
-            normalized_lines = [_normalize_duplicate_line(line) for line in analysis.sanitized_lines]
-            indexed = [(index, line) for index, line in enumerate(normalized_lines, start=1) if line]
-            for index in range(0, max(0, len(indexed) - window_size + 1)):
-                start_line = indexed[index][0]
-                block = tuple(line for _, line in indexed[index : index + window_size])
-                if len(set(block)) <= 1:
-                    continue
-                windows[block].append((analysis, start_line))
-
-        duplicate_issues: list[RefactorIssue] = []
-        seen_blocks: set[tuple[str, ...]] = set()
-        for block, locations in windows.items():
-            unique_locations = {(item.relative_path, line) for item, line in locations}
-            if len(unique_locations) < 2 or block in seen_blocks:
-                continue
-            seen_blocks.add(block)
-            first_analysis, first_line = locations[0]
-            duplicate_issues.append(
-                _issue(
-                    SmellType.DUPLICATE_CODE,
-                    Severity.MEDIUM,
-                    first_analysis.relative_path,
-                    None,
-                    first_line,
-                    first_line + window_size - 1,
-                    [
-                        Evidence(
-                            "发现重复代码片段。",
-                            {
-                                "duplicate_locations": [
-                                    {"file": analysis.relative_path, "start_line": line}
-                                    for analysis, line in locations[:5]
-                                ],
-                                "source": "local-fallback",
-                            },
-                        )
-                    ],
-                    "重复代码会让缺陷修复和规则调整需要多处同步，容易出现行为漂移。",
-                    "优先考虑 Extract Method 或提取共享逻辑。",
-                    RefactoringType.REPLACE_DUPLICATE_LOGIC,
-                    auto_applicable=False,
-                    risk_level=RiskLevel.MEDIUM,
-                    requires_review=True,
-                )
-            )
-            if len(duplicate_issues) >= 20:
-                break
-        return duplicate_issues
+        del analyses
+        return self._scan_duplicate_code_with_cpd()
 
     def _scan_duplicate_code_with_cpd(self) -> list[RefactorIssue]:
         try:
             result = self._run(["mvn", "-q", "pmd:cpd-check"], self.root)
-        except (FileNotFoundError, subprocess.SubprocessError, OSError):
-            self.warnings.append("无法执行 PMD CPD，已使用本地重复代码兜底规则。")
-            return []
+        except (FileNotFoundError, subprocess.SubprocessError, OSError) as err:
+            raise CpdError(f"无法执行 PMD CPD: {err}") from err
 
         output = "\n".join(part for part in [result.stdout, result.stderr] if part)
         if result.returncode == 0:
             return []
         parsed = _parse_cpd_output(output, self.root)
         if not parsed:
-            self.warnings.append("PMD CPD 未返回可解析重复代码，已使用本地重复代码兜底规则。")
+            raise CpdError(f"PMD CPD 执行失败且未返回可解析结果: {output[-1000:]}")
         return parsed
 
 
@@ -689,15 +639,6 @@ def _strip_comments_and_strings(lines: list[str]) -> list[str]:
             index += 1
         sanitized.append("".join(output))
     return sanitized
-
-
-def _normalize_duplicate_line(line: str) -> str:
-    stripped = line.strip()
-    if not stripped or stripped in {"{", "}"}:
-        return ""
-    stripped = re.sub(r"\b\d+\b", "0", stripped)
-    stripped = re.sub(r"\s+", " ", stripped)
-    return stripped
 
 
 def _same_or_nested_type(candidate: str, owner: str) -> bool:

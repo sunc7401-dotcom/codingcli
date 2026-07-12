@@ -558,7 +558,26 @@ public class LargeMathService {{
 
 def _write_minimal_repo(root: Path) -> None:
     (root / ".git").mkdir(exist_ok=True)
-    (root / "pom.xml").write_text("<project />", encoding="utf-8")
+    (root / "pom.xml").write_text(
+        """
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>demo</groupId>
+  <artifactId>sample</artifactId>
+  <version>1.0.0</version>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-pmd-plugin</artifactId>
+        <version>3.28.0</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+""".strip(),
+        encoding="utf-8",
+    )
 
 
 def _dead_code_issue(source_path: Path) -> RefactorIssue:

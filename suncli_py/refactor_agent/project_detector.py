@@ -11,6 +11,9 @@ from pathlib import Path
 from suncli_py.refactor_agent.models import MavenModule, ProjectProfile
 
 CommandRunner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
+PMD_PLUGIN_GROUP_ID = "org.apache.maven.plugins"
+PMD_PLUGIN_ARTIFACT_ID = "maven-pmd-plugin"
+PMD_PLUGIN_VERSION = "3.28.0"
 
 
 def _default_command_runner(command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -48,6 +51,7 @@ class ProjectDetector:
             warnings.append("当前目录不是 Git 仓库，未发现 .git。")
 
         is_maven_project = (self.root / "pom.xml").is_file()
+        has_pmd_cpd_plugin = is_maven_project and self._has_pmd_cpd_plugin(self.root / "pom.xml")
         if not is_maven_project:
             warnings.append("当前目录不是 Maven 项目，未发现 pom.xml。")
 
@@ -66,10 +70,59 @@ class ProjectDetector:
             has_main_java=root_has_main or any(module.has_main_java for module in modules),
             has_test_java=root_has_test or any(module.has_test_java for module in modules),
             is_git_clean=is_git_clean,
+            has_pmd_cpd_plugin=has_pmd_cpd_plugin,
             maven_version=maven_version,
             java_version=java_version,
             modules=modules,
             warnings=warnings,
+        )
+
+    def install_pmd_cpd_plugin(self) -> None:
+        """Add the Maven PMD plugin to the root build after caller confirmation."""
+        pom_path = self.root / "pom.xml"
+        if not pom_path.is_file():
+            raise ValueError("pom.xml does not exist")
+        if self._has_pmd_cpd_plugin(pom_path):
+            return
+
+        parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+        tree = ET.parse(pom_path, parser=parser)
+        project = tree.getroot()
+        namespace = _namespace(project.tag)
+        if namespace:
+            ET.register_namespace("", namespace[1:-1])
+
+        build = project.find(f"{namespace}build")
+        if build is None:
+            build = ET.SubElement(project, f"{namespace}build")
+        plugins = build.find(f"{namespace}plugins")
+        if plugins is None:
+            plugins = ET.SubElement(build, f"{namespace}plugins")
+        plugin = ET.SubElement(plugins, f"{namespace}plugin")
+        ET.SubElement(plugin, f"{namespace}groupId").text = PMD_PLUGIN_GROUP_ID
+        ET.SubElement(plugin, f"{namespace}artifactId").text = PMD_PLUGIN_ARTIFACT_ID
+        ET.SubElement(plugin, f"{namespace}version").text = PMD_PLUGIN_VERSION
+
+        ET.indent(tree, space="  ")
+        tree.write(pom_path, encoding="utf-8", xml_declaration=True)
+
+    @staticmethod
+    def _has_pmd_cpd_plugin(pom_path: Path) -> bool:
+        try:
+            project = ET.parse(pom_path).getroot()
+        except (ET.ParseError, OSError):
+            return False
+        namespace = _namespace(project.tag)
+        build = project.find(f"{namespace}build")
+        if build is None:
+            return False
+        plugins = build.find(f"{namespace}plugins")
+        if plugins is None:
+            return False
+        return any(
+            (plugin.findtext(f"{namespace}artifactId") or "").strip() == PMD_PLUGIN_ARTIFACT_ID
+            and (plugin.findtext(f"{namespace}groupId") or PMD_PLUGIN_GROUP_ID).strip() == PMD_PLUGIN_GROUP_ID
+            for plugin in plugins.findall(f"{namespace}plugin")
         )
 
     def _is_git_repo(self) -> bool:
@@ -145,3 +198,7 @@ class ProjectDetector:
             return self._run(command, self.root)
         except (FileNotFoundError, subprocess.SubprocessError, OSError):
             return None
+
+
+def _namespace(tag: str) -> str:
+    return tag.split("}", 1)[0] + "}" if tag.startswith("{") else ""

@@ -11,7 +11,11 @@ from suncli_py.refactor_agent.scanner import JavaSmellScanner
 def _runner(command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     del cwd
     if list(command) == ["mvn", "-q", "pmd:cpd-check"]:
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        output = """Found a 6 line (30 tokens) duplication in the following files:
+Starting at line 130 of src/main/java/demo/OrderHelper.java
+Starting at line 142 of src/main/java/demo/OrderHelper.java
+"""
+        return subprocess.CompletedProcess(command, 1, stdout=output, stderr="")
     return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
 
