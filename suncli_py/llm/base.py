@@ -298,7 +298,8 @@ class AbstractOpenAiCompatibleClient:
     def _append_message_content(self, msg_node: dict, msg: Message) -> None:
         if msg.has_image_content() and not self.supports_image_input:
             stripped = msg.without_image_content(
-                "当前 provider/model 不支持图片附件，已省略 {count} 张；请基于文字工具结果继续，必要时改用支持视觉输入的模型。"
+                "当前 provider/model 不支持图片附件，已省略 {count} 张；"
+                "请基于文字工具结果继续，必要时改用支持视觉输入的模型。"
             )
             msg_node["content"] = stripped.content
             return

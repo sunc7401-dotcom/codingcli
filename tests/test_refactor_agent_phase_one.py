@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from suncli_py.refactor_agent.commands import RefactorAgentError, run_scan
-from suncli_py.refactor_agent.project_detector import ProjectDetector
+from suncli_py.refactor_agent.analysis.project_detector import ProjectDetector
+from suncli_py.refactor_agent.interface.commands import RefactorAgentError, run_scan
 
 
 def _runner(command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -143,7 +143,7 @@ def test_scan_prompts_before_installing_pmd_plugin(
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("suncli_py.refactor_agent.commands.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("suncli_py.refactor_agent.interface.commands.sys.stdin.isatty", lambda: True)
     answers = iter(["yes", "yes"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
 
@@ -155,7 +155,7 @@ def test_scan_prompts_before_installing_pmd_plugin(
         def scan(self) -> list:
             return []
 
-    monkeypatch.setattr("suncli_py.refactor_agent.commands.JavaSmellScanner", EmptyScanner)
+    monkeypatch.setattr("suncli_py.refactor_agent.interface.commands.JavaSmellScanner", EmptyScanner)
 
     assert run_scan(llm_assistant=_FakeTriageAssistant()) == 0
     assert ProjectDetector(tmp_path, command_runner=_runner).detect().has_pmd_cpd_plugin is True

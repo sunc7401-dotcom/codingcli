@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from suncli_py.refactor_agent.chat import RefactorChatSession
-from suncli_py.refactor_agent.cli import build_parser
-from suncli_py.refactor_agent.models import (
+from suncli_py.refactor_agent.core.models import (
     Evidence,
     ProjectProfile,
     RefactoringType,
@@ -14,7 +12,9 @@ from suncli_py.refactor_agent.models import (
     Severity,
     SmellType,
 )
-from suncli_py.refactor_agent.storage import RefactorAgentStorage
+from suncli_py.refactor_agent.core.storage import RefactorAgentStorage
+from suncli_py.refactor_agent.interface.chat import RefactorChatSession
+from suncli_py.refactor_agent.interface.cli import build_parser
 
 
 def test_cli_registers_chat_command() -> None:

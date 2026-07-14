@@ -6,9 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from suncli_py.refactor_agent.commands import RefactorAgentError, run_apply
-from suncli_py.refactor_agent.llm_assistant import RefactorLlmAssistant
-from suncli_py.refactor_agent.models import (
+from suncli_py.refactor_agent.assistant.llm_assistant import RefactorLlmAssistant
+from suncli_py.refactor_agent.core.models import (
     CoverageAssessment,
     Evidence,
     JavaContext,
@@ -19,7 +18,8 @@ from suncli_py.refactor_agent.models import (
     Severity,
     SmellType,
 )
-from suncli_py.refactor_agent.storage import RefactorAgentStorage
+from suncli_py.refactor_agent.core.storage import RefactorAgentStorage
+from suncli_py.refactor_agent.interface.commands import RefactorAgentError, run_apply
 
 
 def test_apply_decline_does_not_write_files_or_artifacts(

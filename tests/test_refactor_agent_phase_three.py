@@ -5,8 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from suncli_py.refactor_agent.commands import RefactorAgentError, run_plan
-from suncli_py.refactor_agent.models import (
+from suncli_py.refactor_agent.core.models import (
     Evidence,
     ProjectProfile,
     RefactoringType,
@@ -16,7 +15,8 @@ from suncli_py.refactor_agent.models import (
     Severity,
     SmellType,
 )
-from suncli_py.refactor_agent.storage import RefactorAgentStorage
+from suncli_py.refactor_agent.core.storage import RefactorAgentStorage
+from suncli_py.refactor_agent.interface.commands import RefactorAgentError, run_plan
 
 
 def test_plan_generates_structured_files_from_scanned_issue(

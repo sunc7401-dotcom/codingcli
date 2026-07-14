@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from suncli_py.refactor_agent.java_ast import AstFileAnalysis, AstMethodCall, JavaParserAnalyzer
-from suncli_py.refactor_agent.java_context import JavaContextCollector
-from suncli_py.refactor_agent.models import (
+from suncli_py.refactor_agent.analysis.java_ast import AstFileAnalysis, AstMethodCall, JavaParserAnalyzer
+from suncli_py.refactor_agent.analysis.java_context import JavaContextCollector
+from suncli_py.refactor_agent.core.models import (
     RefactoringType,
     RefactorIssue,
     RiskLevel,

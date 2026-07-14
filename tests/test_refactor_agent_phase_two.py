@@ -4,8 +4,8 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from suncli_py.refactor_agent.models import SmellType
-from suncli_py.refactor_agent.scanner import JavaSmellScanner
+from suncli_py.refactor_agent.analysis.scanner import JavaSmellScanner
+from suncli_py.refactor_agent.core.models import SmellType
 
 
 def _runner(command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:

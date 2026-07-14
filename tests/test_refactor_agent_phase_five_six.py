@@ -5,8 +5,7 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from suncli_py.refactor_agent.commands import run_apply, run_characterize, run_rollback, run_verify
-from suncli_py.refactor_agent.models import (
+from suncli_py.refactor_agent.core.models import (
     CoverageAssessment,
     Evidence,
     JavaContext,
@@ -17,7 +16,8 @@ from suncli_py.refactor_agent.models import (
     Severity,
     SmellType,
 )
-from suncli_py.refactor_agent.storage import RefactorAgentStorage
+from suncli_py.refactor_agent.core.storage import RefactorAgentStorage
+from suncli_py.refactor_agent.interface.commands import run_apply, run_characterize, run_rollback, run_verify
 
 
 def test_verify_runs_maven_and_records_jacoco_coverage(

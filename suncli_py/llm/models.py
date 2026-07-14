@@ -25,16 +25,16 @@ class ContentPart:
     mime_type: str | None = None
 
     @classmethod
-    def text(cls, text: str) -> ContentPart:
+    def from_text(cls, text: str) -> ContentPart:
         return cls(type="text", text=text)
 
     @classmethod
-    def image_base64(cls, image_base64: str, mime_type: str | None = None) -> ContentPart:
+    def from_image_base64(cls, image_base64: str, mime_type: str | None = None) -> ContentPart:
         mime = mime_type or "image/png"
         return cls(type="image_base64", image_base64=image_base64, mime_type=mime)
 
     @classmethod
-    def image_url(cls, image_url: str) -> ContentPart:
+    def from_image_url(cls, image_url: str) -> ContentPart:
         return cls(type="image_url", image_url=image_url)
 
     def is_text(self) -> bool:
@@ -137,7 +137,12 @@ class Message:
         return cls(role="user", content=Message._plain_text(parts), content_parts=list(parts) if parts else None)
 
     @classmethod
-    def assistant(cls, content: str, reasoning_content: str | None = None, tool_calls: list[ToolCall] | None = None) -> Message:
+    def assistant(
+        cls,
+        content: str,
+        reasoning_content: str | None = None,
+        tool_calls: list[ToolCall] | None = None,
+    ) -> Message:
         return cls(role="assistant", content=content, reasoning_content=reasoning_content, tool_calls=tool_calls)
 
     @classmethod
@@ -160,7 +165,10 @@ class Message:
         if not self.has_image_content():
             return self
 
-        template = notice_template or "历史图片附件已省略 {count} 张；如需重新查看，请使用上文 Image source 或相关工具结果。"
+        template = notice_template or (
+            "历史图片附件已省略 {count} 张；"
+            "如需重新查看，请使用上文 Image source 或相关工具结果。"
+        )
         stripped: list[ContentPart] = []
         omitted = 0
         for p in (self.content_parts or []):
@@ -172,7 +180,7 @@ class Message:
                 stripped.append(p)
 
         notice = template.replace("{count}", str(omitted))
-        stripped.append(ContentPart.text(f"[{notice}]"))
+        stripped.append(ContentPart.from_text(f"[{notice}]"))
         return Message(
             role=self.role,
             content=self._plain_text(stripped),

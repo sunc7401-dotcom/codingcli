@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from suncli_py.refactor_agent.java_ast import JavaAstError, JavaParserAnalyzer
-from suncli_py.refactor_agent.models import SmellType
-from suncli_py.refactor_agent.scanner import JavaSmellScanner
+from suncli_py.refactor_agent.analysis.java_ast import JavaAstError, JavaParserAnalyzer
+from suncli_py.refactor_agent.analysis.scanner import JavaSmellScanner
+from suncli_py.refactor_agent.core.models import SmellType
 
 
 def test_scanner_uses_javaparser_ast_method_ranges(tmp_path: Path) -> None:

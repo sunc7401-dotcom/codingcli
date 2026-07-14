@@ -9,17 +9,17 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
-from suncli_py.llm.models import ChatResponse, ToolCall, _Function
-from suncli_py.refactor_agent.commands import RefactorAgentError, run_apply, run_plan, run_scan
-from suncli_py.refactor_agent.java_ast import AstFileAnalysis
-from suncli_py.refactor_agent.llm_assistant import (
+from suncli_py.llm.models import ChatResponse, ContentPart, ToolCall, _Function
+from suncli_py.refactor_agent.analysis.java_ast import AstFileAnalysis
+from suncli_py.refactor_agent.assistant.llm_assistant import (
     RefactorLlmAssistant,
     RefactorLlmError,
     _reset_sync_loop_for_tests,
     _run_async,
     _sync_loop_id_for_tests,
 )
-from suncli_py.refactor_agent.models import (
+from suncli_py.refactor_agent.assistant.toolbox import RefactorAgentToolbox, RefactorAgentToolRuntime
+from suncli_py.refactor_agent.core.models import (
     CoverageAssessment,
     DecisionStatus,
     Evidence,
@@ -33,8 +33,24 @@ from suncli_py.refactor_agent.models import (
     Severity,
     SmellType,
 )
-from suncli_py.refactor_agent.storage import RefactorAgentStorage
-from suncli_py.refactor_agent.toolbox import RefactorAgentToolbox, RefactorAgentToolRuntime
+from suncli_py.refactor_agent.core.storage import RefactorAgentStorage
+from suncli_py.refactor_agent.interface.commands import RefactorAgentError, run_apply, run_plan, run_scan
+
+
+def test_content_part_defaults_and_factories_do_not_shadow_fields() -> None:
+    empty = ContentPart(type="text")
+    assert empty.text is None
+    assert empty.image_base64 is None
+    assert empty.image_url is None
+
+    text_part = ContentPart.from_text("hello")
+    image_part = ContentPart.from_image_base64("aGVsbG8=", "image/png")
+    url_part = ContentPart.from_image_url("https://example.com/image.png")
+
+    assert text_part.text == "hello"
+    assert image_part.image_base64 == "aGVsbG8="
+    assert image_part.mime_type == "image/png"
+    assert url_part.image_url == "https://example.com/image.png"
 
 
 def test_llm_assistant_explains_issues_and_enhances_plan(tmp_path: Path) -> None:
