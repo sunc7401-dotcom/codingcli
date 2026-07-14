@@ -79,6 +79,9 @@ def run_scan(*, output_format: str = "text", llm_assistant: RefactorLlmAssistant
     except CpdError as err:
         raise RefactorAgentError(f"PMD CPD 检测失败，scan 已停止: {err}") from err
     assistant = _require_llm_assistant(llm_assistant)
+    bind_scan_analyses = getattr(assistant, "bind_scan_analyses", None)
+    if callable(bind_scan_analyses):
+        bind_scan_analyses(scanner.ast_analyses)
     if output_format == "text":
         print(f"Found {len(issues)} candidate issue(s). Asking LLM to triage...")
     try:

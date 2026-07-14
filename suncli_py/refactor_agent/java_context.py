@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
-from suncli_py.refactor_agent.java_ast import JavaAstError, JavaParserAnalyzer
+from suncli_py.refactor_agent.java_ast import AstFileAnalysis, JavaAstError, JavaParserAnalyzer
 from suncli_py.refactor_agent.models import JavaContext, RefactorIssue
 
 IGNORED_DIRS = {".git", ".paicli", "target", "build", ".gradle", "node_modules"}
 
 
 class JavaContextCollector:
-    def __init__(self, root: str | Path) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        ast_analyses: Sequence[AstFileAnalysis] | None = None,
+    ) -> None:
         self.root = Path(root).resolve()
+        self._ast_analyses = tuple(ast_analyses) if ast_analyses is not None else None
 
     def collect(self, issue: RefactorIssue) -> JavaContext:
         warnings: list[str] = []
@@ -84,15 +90,19 @@ class JavaContextCollector:
         return callers
 
     def _find_direct_callers_with_symbols(self, issue: RefactorIssue) -> list[str]:
-        java_files = [
-            path
-            for path in sorted(self.root.rglob("*.java"))
-            if not any(part in IGNORED_DIRS for part in path.relative_to(self.root).parts)
-        ]
-        try:
-            analyses = JavaParserAnalyzer(self.root).analyze_files(java_files)
-        except JavaAstError:
-            return []
+        analyses: Sequence[AstFileAnalysis]
+        if self._ast_analyses is not None:
+            analyses = self._ast_analyses
+        else:
+            java_files = [
+                path
+                for path in sorted(self.root.rglob("*.java"))
+                if not any(part in IGNORED_DIRS for part in path.relative_to(self.root).parts)
+            ]
+            try:
+                analyses = JavaParserAnalyzer(self.root).analyze_files(java_files)
+            except JavaAstError:
+                return []
 
         callers: list[str] = []
         for analysis in analyses:

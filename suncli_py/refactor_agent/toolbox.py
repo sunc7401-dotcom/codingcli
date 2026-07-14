@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from suncli_py.refactor_agent.java_ast import AstFileAnalysis
 from suncli_py.refactor_agent.java_context import JavaContextCollector
 from suncli_py.refactor_agent.models import RefactorIssue, RefactorPlan, VerificationResult
 
@@ -20,22 +22,21 @@ class RefactorAgentToolbox:
     files and never applies patches.
     """
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        ast_analyses: Sequence[AstFileAnalysis] | None = None,
+    ) -> None:
         self.root = Path(root).resolve()
+        self._ast_analyses = tuple(ast_analyses) if ast_analyses is not None else None
 
     def issue_context(self, issue: RefactorIssue) -> dict[str, Any]:
-        context = JavaContextCollector(self.root).collect(issue)
+        context = JavaContextCollector(self.root, ast_analyses=self._ast_analyses).collect(issue)
         return {
             "issue": issue.to_dict(),
             "source_excerpt": context.source_excerpt,
             "related_tests": context.related_tests,
-            "related_test_excerpts": {
-                file_path: self.read_file(file_path, max_chars=4000) for file_path in context.related_tests[:3]
-            },
             "direct_callers": context.direct_callers,
-            "direct_caller_excerpts": {
-                file_path: self.read_file(file_path, max_chars=3000) for file_path in context.direct_callers[:3]
-            },
             "warnings": context.warnings,
         }
 
@@ -109,7 +110,9 @@ class RefactorAgentToolbox:
             relative = path.relative_to(self.root)
             if any(part in IGNORED_DIRS for part in relative.parts):
                 continue
-            for line_number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+            for line_number, line in enumerate(
+                path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+            ):
                 if pattern.search(line):
                     results.append(
                         {
@@ -172,7 +175,9 @@ class RefactorAgentToolRuntime:
                 "type": "function",
                 "function": {
                     "name": "get_issue_context",
-                    "description": "Return source excerpt, related tests, direct callers, and rule/AST evidence for an issue.",
+                    "description": (
+                        "Return source excerpt, related tests, direct callers, and rule/AST evidence for an issue."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {"issue_id": {"type": "string"}},

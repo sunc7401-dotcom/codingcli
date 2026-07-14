@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from suncli_py.config.config import PaiCliConfig
 from suncli_py.llm.client import LlmClient
 from suncli_py.llm.factory import create_client_from_config
-from suncli_py.llm.models import Message
+from suncli_py.llm.models import Message, ToolCall
+from suncli_py.refactor_agent.java_ast import AstFileAnalysis
 from suncli_py.refactor_agent.models import (
     CandidateDecision,
     DecisionStatus,
@@ -45,6 +50,11 @@ class RefactorLlmAssistant:
 
     def __init__(self, client: LlmClient) -> None:
         self.client = client
+        self._scan_ast_analyses: tuple[AstFileAnalysis, ...] | None = None
+
+    def bind_scan_analyses(self, analyses: Sequence[AstFileAnalysis]) -> None:
+        """Reuse the AST snapshot produced by the current scan."""
+        self._scan_ast_analyses = tuple(analyses)
 
     @classmethod
     def from_config(cls) -> RefactorLlmAssistant | None:
@@ -56,7 +66,7 @@ class RefactorLlmAssistant:
         if not issues:
             return TriageResult(issues=[], decisions=[])
 
-        toolbox = RefactorAgentToolbox(root)
+        toolbox = RefactorAgentToolbox(root, self._scan_ast_analyses)
         tools = RefactorAgentToolRuntime(toolbox, issues=issues)
         decisions: list[CandidateDecision] = []
         ranked: list[tuple[int, RefactorIssue]] = []
@@ -348,18 +358,20 @@ class RefactorLlmAssistant:
             if not response:
                 return {}
             if response.has_tool_calls() and tools is not None:
+                tool_calls = response.tool_calls or []
                 messages.append(
                     Message.assistant(
                         content=response.content,
                         reasoning_content=response.reasoning_content,
-                        tool_calls=response.tool_calls,
+                        tool_calls=tool_calls,
                     )
                 )
-                for tool_call in response.tool_calls or []:
+                tool_outputs = _run_async(_execute_tool_calls(tools, tool_calls))
+                for tool_call, output in zip(tool_calls, tool_outputs, strict=True):
                     messages.append(
                         Message.tool(
                             tool_call.id,
-                            tools.execute(tool_call.name, _safe_tool_arguments(tool_call.arguments)),
+                            output,
                         )
                     )
                 continue
@@ -369,6 +381,30 @@ class RefactorLlmAssistant:
 
 class RefactorLlmError(Exception):
     """Raised when the LLM provider call fails."""
+
+
+async def _execute_tool_calls(tools: RefactorAgentToolRuntime, tool_calls: list[ToolCall]) -> list[str]:
+    """Execute one model-planned tool batch concurrently while preserving result order."""
+    if not tool_calls:
+        return []
+
+    count = len(tool_calls)
+    logger.info("LLM requested {} tool(s)", count)
+    if count > 1:
+        logger.info("Executing {} independent tools in parallel", count)
+    started = time.monotonic()
+    outputs = await asyncio.gather(
+        *[
+            asyncio.to_thread(
+                tools.execute,
+                tool_call.name,
+                _safe_tool_arguments(tool_call.arguments),
+            )
+            for tool_call in tool_calls
+        ]
+    )
+    logger.info("Completed {} tool(s) in {:.0f} ms", count, (time.monotonic() - started) * 1000)
+    return list(outputs)
 
 
 _SYNC_LOOP: asyncio.AbstractEventLoop | None = None

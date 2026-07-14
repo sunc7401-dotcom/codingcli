@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import threading
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from loguru import logger
 
 from suncli_py.llm.models import ChatResponse, ToolCall, _Function
 from suncli_py.refactor_agent.commands import RefactorAgentError, run_apply, run_plan, run_scan
+from suncli_py.refactor_agent.java_ast import AstFileAnalysis
 from suncli_py.refactor_agent.llm_assistant import (
     RefactorLlmAssistant,
     RefactorLlmError,
@@ -30,6 +34,7 @@ from suncli_py.refactor_agent.models import (
     SmellType,
 )
 from suncli_py.refactor_agent.storage import RefactorAgentStorage
+from suncli_py.refactor_agent.toolbox import RefactorAgentToolbox, RefactorAgentToolRuntime
 
 
 def test_llm_assistant_explains_issues_and_enhances_plan(tmp_path: Path) -> None:
@@ -91,24 +96,23 @@ def test_scan_lets_llm_triage_rule_and_ast_candidates(
     source_path = _write_scan_long_method_java_file(tmp_path)
     monkeypatch.chdir(tmp_path)
 
-    exit_code = run_scan(
-        output_format="json",
-        llm_assistant=_FakeDecisionAssistant(
-            {
-                "RA-0001": {
-                    "priority": 1,
-                    "severity": "high",
-                    "risk_level": "medium",
-                    "suggested_refactoring": "Extract Method",
-                    "impact": "LLM decided the method is too hard to safely maintain",
-                    "recommendation": "Extract a cohesive helper after checking tests",
-                    "decision_reason": "AST metrics and source excerpt show repeated accumulator steps",
-                }
+    assistant = _FakeDecisionAssistant(
+        {
+            "RA-0001": {
+                "priority": 1,
+                "severity": "high",
+                "risk_level": "medium",
+                "suggested_refactoring": "Extract Method",
+                "impact": "LLM decided the method is too hard to safely maintain",
+                "recommendation": "Extract a cohesive helper after checking tests",
+                "decision_reason": "AST metrics and source excerpt show repeated accumulator steps",
             }
-        ),
+        }
     )
+    exit_code = run_scan(output_format="json", llm_assistant=assistant)
 
     assert exit_code == 0
+    assert assistant.bound_analysis_paths == [source_path.relative_to(tmp_path).as_posix()]
     issue = RefactorAgentStorage(tmp_path).load_scan_result().issues[0]
     assert issue.file_path == source_path.relative_to(tmp_path).as_posix()
     assert issue.severity == Severity.HIGH
@@ -233,6 +237,76 @@ def test_llm_plan_can_call_readonly_tools_before_final_json(tmp_path: Path) -> N
     assert planned.planning_source == "llm-primary"
     assert client.tool_schema_seen is True
     assert any(message.role == "tool" and "unusedPrivate" in message.content for message in client.seen_messages)
+
+
+def test_issue_context_prefetches_paths_without_related_file_contents(tmp_path: Path) -> None:
+    source_path = _write_dead_code_java_file(tmp_path)
+
+    context = RefactorAgentToolbox(tmp_path, ast_analyses=[]).issue_context(_dead_code_issue(source_path))
+
+    assert "unusedPrivate" in context["source_excerpt"]
+    assert "related_tests" in context
+    assert "direct_callers" in context
+    assert "related_test_excerpts" not in context
+    assert "direct_caller_excerpts" not in context
+
+
+def test_llm_executes_multiple_tool_calls_in_parallel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_path = _write_dead_code_java_file(tmp_path)
+    issue = _dead_code_issue(source_path)
+    plan = _plan(issue)
+    client = _FakeLlmClient(
+        [
+            ChatResponse(
+                role="assistant",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="tool-read",
+                        function=_Function(name="read_file", arguments='{"file_path":"first.java"}'),
+                    ),
+                    ToolCall(
+                        id="tool-search",
+                        function=_Function(name="search_code", arguments='{"query":"unusedPrivate"}'),
+                    ),
+                ],
+            ),
+            '{"goal":"parallel evidence collection",'
+            '"expected_changes":["delete unusedPrivate"],'
+            '"out_of_scope":["public API changes"],'
+            '"risk_reasons":["reflection"],'
+            '"verification_commands":["mvn test"]}',
+        ]
+    )
+    barrier = threading.Barrier(2, timeout=2)
+    worker_threads: set[int] = set()
+    lock = threading.Lock()
+
+    def execute_in_parallel(self, name, arguments):
+        del self, arguments
+        with lock:
+            worker_threads.add(threading.get_ident())
+        barrier.wait()
+        return f'{{"tool":"{name}"}}'
+
+    monkeypatch.setattr(RefactorAgentToolRuntime, "execute", execute_in_parallel)
+    log_messages: list[str] = []
+    sink_id = logger.add(lambda message: log_messages.append(str(message)), level="INFO")
+    try:
+        planned = RefactorLlmAssistant(client).generate_plan(tmp_path, plan, issue)
+    finally:
+        logger.remove(sink_id)
+
+    assert planned.goal == "parallel evidence collection"
+    assert len(worker_threads) == 2
+    tool_messages = [message for message in client.seen_messages if message.role == "tool"]
+    assert [message.tool_call_id for message in tool_messages] == ["tool-read", "tool-search"]
+    log_text = "".join(log_messages)
+    assert "Executing 2 independent tools in parallel" in log_text
+    assert "Completed 2 tool(s)" in log_text
 
 
 def test_apply_uses_llm_controlled_edit_operations(
@@ -459,6 +533,10 @@ class _FakePatchAssistant:
 class _FakeDecisionAssistant:
     def __init__(self, decisions: dict[str, dict]) -> None:
         self.decisions = decisions
+        self.bound_analysis_paths: list[str] = []
+
+    def bind_scan_analyses(self, analyses: Sequence[AstFileAnalysis]) -> None:
+        self.bound_analysis_paths = [analysis.relative_path for analysis in analyses]
 
     def triage_issues(self, root: Path, issues: list[RefactorIssue]) -> list[RefactorIssue]:
         del root

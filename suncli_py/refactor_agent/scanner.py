@@ -104,10 +104,12 @@ class JavaSmellScanner:
         self.root = Path(root).resolve()
         self._run = command_runner or _default_command_runner
         self._ast_analyzer = JavaParserAnalyzer(self.root, ast_command_runner)
+        self.ast_analyses: tuple[AstFileAnalysis, ...] = ()
         self.warnings: list[str] = []
 
     def scan(self) -> list[RefactorIssue]:
         self.warnings = []
+        self.ast_analyses = ()
         java_files = self._collect_java_files()
         analyses = self._analyze_files(java_files)
         issues: list[RefactorIssue] = []
@@ -148,7 +150,8 @@ class JavaSmellScanner:
         return sorted(files)
 
     def _analyze_files(self, paths: list[Path]) -> list[JavaFileAnalysis]:
-        ast_by_path = {analysis.relative_path: analysis for analysis in self._ast_analyzer.analyze_files(paths)}
+        ast_analyses = self._ast_analyzer.analyze_files(paths)
+        ast_by_path = {analysis.relative_path: analysis for analysis in ast_analyses}
         analyses: list[JavaFileAnalysis] = []
         for path in paths:
             relative_path = path.relative_to(self.root).as_posix()
@@ -156,6 +159,7 @@ class JavaSmellScanner:
             if ast_analysis is None:
                 raise JavaAstError(f"JavaParser returned no AST for {relative_path}")
             analyses.append(self._analysis_from_ast(ast_analysis))
+        self.ast_analyses = tuple(ast_analyses)
         return analyses
 
     def _analysis_from_ast(self, ast_analysis: AstFileAnalysis) -> JavaFileAnalysis:

@@ -30,6 +30,9 @@ def test_scanner_uses_javaparser_ast_method_ranges(tmp_path: Path) -> None:
     assert long_method.symbol == "hugeFromAst"
     assert long_method.start_line == 4
     assert long_method.end_line == 90
+    assert [analysis.relative_path for analysis in scanner.ast_analyses] == [
+        "src/main/java/demo/OrderService.java"
+    ]
     assert not any("JavaParser AST 解析不可用" in warning for warning in scanner.warnings)
 
 
