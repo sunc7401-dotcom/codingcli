@@ -5,9 +5,9 @@ Mirrors ``com.paicli.llm.LlmClient`` interface.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
-from suncli_py.llm.models import ChatResponse, Message, StreamListener, Tool
+from suncli_py.llm.models import ChatResponse, Message, StreamListener
 
 
 @runtime_checkable
@@ -17,7 +17,7 @@ class LlmClient(Protocol):
     async def chat(
         self,
         messages: list[Message],
-        tools: list[Tool] | None = None,
+        tools: list[Any] | None = None,
         listener: StreamListener | None = None,
     ) -> ChatResponse:
         """Send a chat request and return the full response.

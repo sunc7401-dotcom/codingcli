@@ -11,6 +11,7 @@
 - 写入后运行 Maven 编译与测试，并结合 JaCoCo 报告评估覆盖情况。
 - 验证失败时执行受控的 LLM 修复循环；必要时从任务快照回滚。
 - 提供命令行子命令和交互式 `chat` 工作流。
+- 提供项目 `PAI.md`、项目级/全局长期记忆、多轮 Chat 短期记忆和自动上下文压缩。
 
 ## 环境要求
 
@@ -63,6 +64,36 @@ refactor-agent characterize --issue RA-0001
 refactor-agent rollback --task TASK_ID
 refactor-agent chat
 ```
+
+### 记忆系统
+
+Python 版长期记忆独立保存在 `~/.paicli-py/memory/long_term_memory.json`，可通过
+`PAICLI_PY_MEMORY_DIR` 指定其他目录。项目级记忆只在当前项目可见，`--global` 记忆在所有项目可见：
+
+```bash
+refactor-agent save "项目使用 Java 17"
+refactor-agent save --global "默认用中文回答"
+refactor-agent memory status
+refactor-agent memory list
+refactor-agent memory search "Java"
+refactor-agent memory delete fact-abcd1234
+refactor-agent memory clear
+```
+
+`refactor-agent init` 会在当前项目生成精简 `PAI.md`，默认不覆盖已有文件；需要重建时使用
+`refactor-agent init --force`。启动 LLM 流程时按顺序加载：
+
+1. `~/.paicli-py/PAI.md`
+2. 项目根 `PAI.md`
+3. `.paicli/PAI.md`
+4. `PAI.local.md`
+5. `.paicli/PAI.local.md`
+
+PAI.md 可通过单独一行 `@relative/path.md` 导入同一根目录内的文件。总注入内容限制为 24,000 字符。
+
+`chat` 中可使用 `/memory`、`/save`、`/init`、`/compact` 和 `/clear`。其他自然语言输入进入多轮项目助手；
+它只能使用只读的文件读取/代码搜索工具。长期记忆只会在用户显式使用保存命令，或明确要求助手“记住”并触发
+`save_memory` 时写入，不会从普通对话中自动提取。
 
 `apply`、`characterize` 和冲突回滚默认要求确认；自动化场景可按命令帮助使用 `--yes`。`apply` 还支持 `--max-repair-attempts N`。
 

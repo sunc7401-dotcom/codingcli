@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
+import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
+from suncli_py.config.config import PaiCliConfig
+from suncli_py.llm.client import LlmClient
+from suncli_py.llm.factory import create_client_from_config
+from suncli_py.llm.models import Message
+from suncli_py.memory.manager import MemoryManager
+from suncli_py.memory.models import MemoryEntry, MemoryType
+from suncli_py.memory.project import ProjectMemoryInitializer
+from suncli_py.memory.storage import LongTermMemory
+from suncli_py.refactor_agent.assistant.llm_assistant import _run_async
+from suncli_py.refactor_agent.assistant.toolbox import RefactorAgentToolbox
 from suncli_py.refactor_agent.core.storage import RefactorAgentStorage
 from suncli_py.refactor_agent.interface.commands import (
     RefactorAgentError,
@@ -40,8 +53,15 @@ HELP_TEXT = """Commands:
   rollback
   rollback --yes
   status
+  /memory [list|search QUERY|delete ID|clear]
+  /save [--global] FACT
+  /init [--force]
+  /compact
+  /clear
   help
   exit
+
+Any other input starts a multi-turn project-assistant conversation.
 """.strip()
 
 
@@ -57,10 +77,18 @@ class RefactorChatSession:
     report_handler: Callable[..., int] = run_report
     printer: Printer = print
     selected_issue_id: IssueId = None
+    client: LlmClient | None = None
+    long_term_memory: LongTermMemory | None = None
+    resolved_root: Path = field(init=False)
+    active_long_term: LongTermMemory = field(init=False)
 
     def __post_init__(self) -> None:
-        self.root = Path(self.root).resolve()
-        self.storage = RefactorAgentStorage(self.root)
+        self.resolved_root = Path(self.root).resolve()
+        self.root = self.resolved_root
+        self.storage = RefactorAgentStorage(self.resolved_root)
+        self.active_long_term = self.long_term_memory or LongTermMemory()
+        self.memory: MemoryManager | None = None
+        self.history: list[Message] = []
 
     def run(self) -> int:
         self.printer("LLM-driven refactor-CLI command shell")
@@ -87,6 +115,24 @@ class RefactorChatSession:
                 return False
             if command in {"help", "?"}:
                 self.printer(HELP_TEXT)
+                return True
+            if command in {"/memory", "/mem"}:
+                self._handle_memory(argv)
+                return True
+            if command == "/save":
+                self._handle_save(argv)
+                return True
+            if command == "/init":
+                self._handle_init(argv)
+                return True
+            if command == "/compact":
+                self._handle_compact()
+                return True
+            if command == "/clear":
+                self.history.clear()
+                if self.memory:
+                    self.memory.clear_short_term()
+                self.printer("Conversation history cleared; long-term memory was preserved.")
                 return True
             if command == "status":
                 self._show_status()
@@ -122,8 +168,211 @@ class RefactorChatSession:
             self.printer(f"error: {err}")
             return True
 
-        self.printer(f"Unknown command: {argv[0]}. Type help for commands.")
+        self._run_assistant(message)
         return True
+
+    def _ensure_memory(self) -> MemoryManager | None:
+        if self.memory is not None:
+            return self.memory
+        if self.client is None:
+            self.client = create_client_from_config(PaiCliConfig.load())
+        if self.client is None:
+            self.printer("error: no configured LLM provider; configure an API key before using natural-language chat")
+            return None
+        self.memory = MemoryManager(self.client, self.resolved_root, long_term=self.active_long_term)
+        return self.memory
+
+    def _run_assistant(self, user_input: str) -> None:
+        memory = self._ensure_memory()
+        if memory is None or self.client is None:
+            return
+        memory.add_user_message(user_input)
+        context = memory.prompt_context(user_input)
+        system = (
+            "You are a project assistant for a Java Maven refactoring repository. Answer questions using repository "
+            "evidence. Use read_file/search_code when useful. Never modify files or execute commands from chat. "
+            "Call save_memory only when the user explicitly asks you to remember a durable fact or preference."
+        )
+        if context:
+            system += "\n\n" + context
+        if self.history and self.history[0].role == "system":
+            self.history[0] = Message.system(system)
+        else:
+            self.history.insert(0, Message.system(system))
+        self.history.append(Message.user(user_input))
+        _run_async(memory.compact_short_term_if_needed())
+        _run_async(memory.compact_history_if_needed(self.history))
+        try:
+            response = _run_async(self._chat_with_tools())
+        except (OSError, RuntimeError) as err:
+            self.printer(f"error: LLM request failed: {err}")
+            return
+        if not response:
+            self.printer("error: the LLM returned an empty response")
+            return
+        self.history.append(Message.assistant(response))
+        memory.add_assistant_message(response)
+        self.printer(response)
+
+    async def _chat_with_tools(self, max_tool_rounds: int = 4) -> str:
+        if self.client is None:
+            return ""
+        schemas = self._chat_tool_schemas()
+        toolbox = RefactorAgentToolbox(self.resolved_root)
+        for _ in range(max_tool_rounds + 1):
+            response = await self.client.chat(messages=self.history, tools=schemas)
+            if not response.has_tool_calls():
+                return response.content
+            calls = response.tool_calls or []
+            self.history.append(
+                Message.assistant(response.content, response.reasoning_content, calls)
+            )
+            for call in calls:
+                output = self._execute_chat_tool(toolbox, call.name, _safe_arguments(call.arguments))
+                self.history.append(Message.tool(call.id, output))
+                if self.memory:
+                    self.memory.add_tool_result(call.name, output)
+        return ""
+
+    def _execute_chat_tool(self, toolbox: RefactorAgentToolbox, name: str, arguments: dict[str, Any]) -> str:
+        try:
+            if name == "read_file":
+                payload: Any = toolbox.read_file_lines(
+                    str(arguments.get("file_path", "")),
+                    start_line=int(arguments.get("start_line", 1) or 1),
+                    end_line=int(arguments["end_line"]) if arguments.get("end_line") is not None else None,
+                )
+                return json.dumps(payload, ensure_ascii=False)
+            if name == "search_code":
+                payload = toolbox.search_code(
+                    str(arguments.get("query", "")), limit=int(arguments.get("limit", 20) or 20)
+                )
+                return json.dumps(payload, ensure_ascii=False)
+            if name == "save_memory" and self.memory:
+                fact = str(arguments.get("fact", "")).strip()
+                if not fact:
+                    return "保存长期记忆失败: fact 不能为空"
+                scope = str(arguments.get("scope", "project"))
+                entry = self.memory.store_fact(fact, scope)
+                return f"已保存到长期记忆({self.active_long_term.scope_of(entry)}): {fact}"
+            return f"unknown tool: {name}"
+        except (OSError, TypeError, ValueError) as err:
+            return f"tool failed: {err}"
+
+    @staticmethod
+    def _chat_tool_schemas() -> list[dict[str, Any]]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a line-numbered repository file excerpt.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {"type": "string"},
+                            "start_line": {"type": "integer"},
+                            "end_line": {"type": "integer"},
+                        },
+                        "required": ["file_path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_code",
+                    "description": "Search Java files for literal text.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+                        "required": ["query"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "save_memory",
+                    "description": "Save a durable fact only when the user explicitly asks to remember it.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "fact": {"type": "string"},
+                            "scope": {"type": "string", "enum": ["project", "global"]},
+                        },
+                        "required": ["fact"],
+                    },
+                },
+            },
+        ]
+
+    def _handle_memory(self, argv: list[str]) -> None:
+        action = argv[1].lower() if len(argv) > 1 else "status"
+        if action == "status":
+            if self.memory:
+                self.printer(self.memory.status())
+            else:
+                self.printer(
+                    f"长期记忆: {len(self.active_long_term.get_all())}条 / "
+                    f"{self.active_long_term.token_count} tokens"
+                )
+            return
+        if action == "list":
+            self._print_memory_entries(self.active_long_term.get_all())
+            return
+        if action == "search":
+            query = " ".join(argv[2:]).strip()
+            self._print_memory_entries(self.active_long_term.search(query, 20, str(self.resolved_root)))
+            return
+        if action == "delete" and len(argv) > 2:
+            deleted = self.active_long_term.delete(argv[2])
+            self.printer(("Deleted: " if deleted else "Memory not found: ") + argv[2])
+            return
+        if action == "clear":
+            self.active_long_term.clear()
+            self.printer("Long-term memory cleared.")
+            return
+        self.printer("Usage: /memory [status|list|search QUERY|delete ID|clear]")
+
+    def _handle_save(self, argv: list[str]) -> None:
+        global_scope = "--global" in argv[1:]
+        fact = " ".join(item for item in argv[1:] if item != "--global").strip()
+        if not fact:
+            self.printer("Usage: /save [--global] FACT")
+            return
+        project = str(self.resolved_root)
+        metadata = {"source": "fact", "scope": "global" if global_scope else "project"}
+        if not global_scope:
+            metadata["project"] = project
+        entry = MemoryEntry(
+            id=f"fact-{uuid.uuid4().hex[:8]}", content=fact, type=MemoryType.FACT, metadata=metadata
+        )
+        self.active_long_term.store(entry)
+        self.printer(f"Saved to long-term memory({'global' if global_scope else 'project'}): {fact}")
+
+    def _handle_init(self, argv: list[str]) -> None:
+        result = ProjectMemoryInitializer.initialize(self.resolved_root, force="--force" in argv[1:])
+        if result.created:
+            self.printer(f"Created {result.path}")
+        elif result.overwritten:
+            self.printer(f"Overwrote {result.path}")
+        else:
+            self.printer(f"Skipped existing {result.path}; use --force to overwrite")
+
+    def _handle_compact(self) -> None:
+        memory = self._ensure_memory()
+        if memory is None:
+            return
+        compacted = bool(_run_async(memory.compact_history_now(self.history)))
+        self.printer("Conversation history compacted." if compacted else "Not enough conversation history to compact.")
+
+    def _print_memory_entries(self, entries: list[Any]) -> None:
+        if not entries:
+            self.printer("No matching long-term memory.")
+            return
+        for entry in entries:
+            self.printer(f"{entry.id} [{self.active_long_term.scope_of(entry)}] {entry.content}")
 
     def _run_scan(self) -> None:
         exit_code = self.scan_handler(output_format="text")
@@ -253,3 +502,11 @@ def _repair_attempts(argv: list[str]) -> int:
             except ValueError:
                 return 1
     return 1
+
+
+def _safe_arguments(arguments: str) -> dict[str, Any]:
+    try:
+        value = json.loads(arguments or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}

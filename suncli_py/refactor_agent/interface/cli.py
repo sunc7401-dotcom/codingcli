@@ -53,6 +53,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("chat", help="start an interactive refactor-agent chat session")
 
+    memory_parser = subparsers.add_parser("memory", help="inspect or manage Python long-term memory")
+    memory_subparsers = memory_parser.add_subparsers(dest="memory_action", required=True)
+    memory_subparsers.add_parser("status", help="show memory counts and token estimate")
+    memory_subparsers.add_parser("list", help="list all stored memories")
+    memory_search = memory_subparsers.add_parser("search", help="search current-project and global memories")
+    memory_search.add_argument("query", help="search query")
+    memory_delete = memory_subparsers.add_parser("delete", help="delete one memory by id")
+    memory_delete.add_argument("id", help="memory id")
+    memory_subparsers.add_parser("clear", help="clear all Python long-term memory")
+
+    save_parser = subparsers.add_parser("save", help="explicitly save a durable fact")
+    save_parser.add_argument("fact", nargs="+", help="fact or preference to remember")
+    save_parser.add_argument(
+        "--global", dest="global_scope", action="store_true", help="make it visible in all projects"
+    )
+
+    init_parser = subparsers.add_parser("init", help="create a concise PAI.md in the current project")
+    init_parser.add_argument("--force", action="store_true", help="overwrite an existing PAI.md")
+
     return parser
 
 
@@ -85,6 +104,19 @@ def main() -> None:
             from suncli_py.refactor_agent.interface.chat import run_chat
 
             raise SystemExit(run_chat())
+        if args.command == "memory":
+            from suncli_py.memory.commands import run_memory
+
+            value = getattr(args, "query", None) or getattr(args, "id", None)
+            raise SystemExit(run_memory(args.memory_action, value))
+        if args.command == "save":
+            from suncli_py.memory.commands import run_save
+
+            raise SystemExit(run_save(" ".join(args.fact), global_scope=args.global_scope))
+        if args.command == "init":
+            from suncli_py.memory.commands import run_init
+
+            raise SystemExit(run_init(force=args.force))
     except RefactorAgentError as err:
         parser.exit(2, f"error: {err}\n")
 

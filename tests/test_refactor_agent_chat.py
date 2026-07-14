@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from suncli_py.llm.models import ChatResponse
+from suncli_py.memory.storage import LongTermMemory
 from suncli_py.refactor_agent.core.models import (
     Evidence,
     ProjectProfile,
@@ -118,19 +120,36 @@ def test_chat_lists_issues_and_selects_first_issue(tmp_path: Path) -> None:
     assert any("RA-0001" in output for output in outputs)
 
 
-def test_chat_rejects_natural_language_requests(tmp_path: Path) -> None:
+def test_chat_routes_natural_language_to_multi_turn_assistant(tmp_path: Path) -> None:
     calls: list[tuple[str, dict]] = []
     outputs: list[str] = []
+    client = _FakeChatClient(["已扫描项目。", "下一步可以生成计划。"])
     session = RefactorChatSession(
         root=tmp_path,
         scan_handler=lambda **kwargs: calls.append(("scan", kwargs)) or 0,
         printer=outputs.append,
+        client=client,
+        long_term_memory=LongTermMemory(tmp_path / "memory"),
     )
 
     assert session.handle_message("扫描当前项目") is True
+    assert session.handle_message("下一步呢？") is True
 
     assert calls == []
-    assert outputs == ["Unknown command: 扫描当前项目. Type help for commands."]
+    assert outputs == ["已扫描项目。", "下一步可以生成计划。"]
+    assert [message.role for message in client.requests[-1]][-3:] == ["user", "assistant", "user"]
+
+
+class _FakeChatClient:
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = list(responses)
+        self.requests: list[list] = []
+        self.max_context_window = 128_000
+
+    async def chat(self, messages, tools=None, listener=None):
+        del tools, listener
+        self.requests.append(list(messages))
+        return ChatResponse(role="assistant", content=self.responses.pop(0))
 
 
 def _issue() -> RefactorIssue:

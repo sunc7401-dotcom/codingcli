@@ -16,6 +16,7 @@ from suncli_py.config.config import PaiCliConfig
 from suncli_py.llm.client import LlmClient
 from suncli_py.llm.factory import create_client_from_config
 from suncli_py.llm.models import Message, ToolCall
+from suncli_py.memory.manager import MemoryManager
 from suncli_py.refactor_agent.analysis.java_ast import AstFileAnalysis
 from suncli_py.refactor_agent.assistant.prompts import (
     edit_system_prompt,
@@ -51,6 +52,7 @@ class RefactorLlmAssistant:
     def __init__(self, client: LlmClient) -> None:
         self.client = client
         self._scan_ast_analyses: tuple[AstFileAnalysis, ...] | None = None
+        self._memory_managers: dict[Path, MemoryManager] = {}
 
     def bind_scan_analyses(self, analyses: Sequence[AstFileAnalysis]) -> None:
         """Reuse the AST snapshot produced by the current scan."""
@@ -99,6 +101,7 @@ class RefactorLlmAssistant:
                     + toolbox.as_json(toolbox.issue_context(issue))
                 ),
                 tools=tools,
+                root=root,
             )
             decision = _candidate_decision(root, issue, data)
             decisions.append(decision)
@@ -163,6 +166,7 @@ class RefactorLlmAssistant:
                 + toolbox.as_json(toolbox.issue_candidates(issues, limit=limit))
             ),
             tools=tools,
+            root=root,
         )
 
         decisions = {
@@ -223,6 +227,7 @@ class RefactorLlmAssistant:
                     + toolbox.as_json(toolbox.issue_context(issue))
                 ),
                 tools=RefactorAgentToolRuntime(toolbox, issue=issue),
+                root=root,
             )
             risk_notes = [str(item) for item in data.get("risk_notes", []) if str(item).strip()]
             evidence = issue.evidence
@@ -253,6 +258,7 @@ class RefactorLlmAssistant:
                 + toolbox.as_json(toolbox.plan_context(plan, issue))
             ),
             tools=tools,
+            root=root,
         )
         return replace(
             plan,
@@ -283,6 +289,7 @@ class RefactorLlmAssistant:
                 '"risk_reasons":["..."],"verification_commands":["..."]}.\n'
                 + json.dumps(payload, ensure_ascii=False)
             ),
+            root=Path(".").resolve(),
         )
         return replace(
             plan,
@@ -313,6 +320,7 @@ class RefactorLlmAssistant:
                 + json.dumps(payload, ensure_ascii=False)
             ),
             tools=tools,
+            root=Path(".").resolve(),
         )
         return data if isinstance(data.get("edits"), list) and data.get("edits") else None
 
@@ -337,6 +345,7 @@ class RefactorLlmAssistant:
                 + toolbox.as_json(toolbox.repair_context(plan, issue, verification, attempt=attempt))
             ),
             tools=tools,
+            root=root,
         )
         return data if isinstance(data.get("edits"), list) and data.get("edits") else None
 
@@ -347,8 +356,16 @@ class RefactorLlmAssistant:
         user: str,
         tools: RefactorAgentToolRuntime | None = None,
         max_tool_rounds: int = 4,
+        root: Path | None = None,
     ) -> dict[str, Any]:
-        messages = [Message.system(system), Message.user(user)]
+        resolved_root = (root or Path(".")).resolve()
+        memory = self._memory_managers.get(resolved_root)
+        if memory is None:
+            memory = MemoryManager(self.client, resolved_root)
+            self._memory_managers[resolved_root] = memory
+        memory_context = memory.prompt_context(user)
+        assembled_system = system + ("\n\n" + memory_context if memory_context else "")
+        messages = [Message.system(assembled_system), Message.user(user)]
         schemas = tools.schemas() if tools is not None else None
         for _ in range(max_tool_rounds + 1):
             try:
