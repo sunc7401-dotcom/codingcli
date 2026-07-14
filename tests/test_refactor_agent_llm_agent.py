@@ -100,8 +100,6 @@ def test_scan_lets_llm_triage_rule_and_ast_candidates(
                     "severity": "high",
                     "risk_level": "medium",
                     "suggested_refactoring": "Extract Method",
-                    "auto_applicable": True,
-                    "requires_review": True,
                     "impact": "LLM decided the method is too hard to safely maintain",
                     "recommendation": "Extract a cohesive helper after checking tests",
                     "decision_reason": "AST metrics and source excerpt show repeated accumulator steps",
@@ -632,9 +630,7 @@ def _dead_code_issue(source_path: Path) -> RefactorIssue:
         impact="dead private code adds noise",
         recommendation="remove dead code",
         suggested_refactoring=RefactoringType.REMOVE_DEAD_CODE,
-        auto_applicable=True,
         risk_level=RiskLevel.LOW,
-        requires_review=False,
     )
 
 
@@ -654,9 +650,7 @@ def _long_method_issue(source_path: Path) -> RefactorIssue:
         impact="long method hides steps",
         recommendation="extract a cohesive accumulator block",
         suggested_refactoring=RefactoringType.EXTRACT_METHOD,
-        auto_applicable=True,
         risk_level=RiskLevel.MEDIUM,
-        requires_review=True,
     )
 
 
@@ -685,7 +679,6 @@ def _plan(
             needs_characterization_test=False,
             recommendation="run tests",
         ),
-        requires_user_confirmation=True,
         context=JavaContext(
             issue_id=issue.id,
             target_file=issue.file_path,

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from suncli_py.refactor_agent.models import RefactoringType, RefactorIssue, RefactorPlan, RiskLevel, SmellType
+from suncli_py.refactor_agent.models import RefactoringType, RefactorIssue, RefactorPlan, SmellType
 from suncli_py.refactor_agent.patch_validator import AstPatchValidator
 
 IGNORED_PARTS = {".git", "target", "build", ".gradle", "node_modules"}
@@ -108,13 +108,6 @@ class RefactorPatcher:
         )
 
     def _validate_plan(self, plan: RefactorPlan, issue: RefactorIssue) -> None:
-        extract_allowed = (
-            issue.suggested_refactoring == RefactoringType.EXTRACT_METHOD and issue.risk_level != RiskLevel.HIGH
-        )
-        if not extract_allowed and (plan.risk_level != RiskLevel.LOW or issue.risk_level != RiskLevel.LOW):
-            raise PatchError("Only low-risk tasks are automatically applied unless using conservative Extract Method.")
-        if not issue.auto_applicable:
-            raise PatchError("Issue is not marked auto-applicable.")
         planned_files = {_normalize_relative_path(file_path) for file_path in plan.files_to_modify}
         if not planned_files:
             raise PatchError("Plan does not include any allowed file.")

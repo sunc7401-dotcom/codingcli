@@ -61,7 +61,7 @@ def test_plan_generates_structured_files_from_scanned_issue(
     assert plan["files_to_modify"] == ["src/main/java/demo/OrderService.java"]
     assert plan["coverage_assessment"]["has_related_test_class"] is True
     assert plan["coverage_assessment"]["related_tests"] == ["src/test/java/demo/OrderServiceTest.java"]
-    assert plan["requires_user_confirmation"] is True
+    assert "requires_user_confirmation" not in plan
     assert plan["planning_source"] == "llm-primary"
     assert "mvn test" in plan["verification_commands"]
 
@@ -116,9 +116,7 @@ def _issue() -> RefactorIssue:
         impact="长方法会让职责边界模糊。",
         recommendation="使用 Extract Method 小步拆分。",
         suggested_refactoring=RefactoringType.EXTRACT_METHOD,
-        auto_applicable=True,
         risk_level=RiskLevel.MEDIUM,
-        requires_review=False,
     )
 
 

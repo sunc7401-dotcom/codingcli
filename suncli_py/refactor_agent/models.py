@@ -113,9 +113,7 @@ class RefactorIssue:
     impact: str
     recommendation: str
     suggested_refactoring: RefactoringType
-    auto_applicable: bool
     risk_level: RiskLevel
-    requires_review: bool
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -137,9 +135,7 @@ class RefactorIssue:
             impact=data["impact"],
             recommendation=data["recommendation"],
             suggested_refactoring=RefactoringType(data["suggested_refactoring"]),
-            auto_applicable=bool(data["auto_applicable"]),
             risk_level=RiskLevel(data["risk_level"]),
-            requires_review=bool(data["requires_review"]),
         )
 
 
@@ -271,7 +267,6 @@ class RefactorPlan:
     verification_commands: list[str]
     rollback_strategy: str
     coverage_assessment: CoverageAssessment
-    requires_user_confirmation: bool
     context: JavaContext
     planning_source: str
 
@@ -293,7 +288,6 @@ class RefactorPlan:
             verification_commands=list(data.get("verification_commands", [])),
             rollback_strategy=data["rollback_strategy"],
             coverage_assessment=CoverageAssessment.from_dict(data["coverage_assessment"]),
-            requires_user_confirmation=bool(data["requires_user_confirmation"]),
             context=JavaContext.from_dict(data["context"]),
             planning_source=data["planning_source"],
         )

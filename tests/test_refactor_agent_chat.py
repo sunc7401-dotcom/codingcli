@@ -146,7 +146,5 @@ def _issue() -> RefactorIssue:
         impact="dead private code adds noise",
         recommendation="remove dead code",
         suggested_refactoring=RefactoringType.REMOVE_DEAD_CODE,
-        auto_applicable=True,
         risk_level=RiskLevel.LOW,
-        requires_review=False,
     )

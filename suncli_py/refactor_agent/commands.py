@@ -16,7 +16,6 @@ from suncli_py.refactor_agent.models import (
     ProjectProfile,
     RefactorIssue,
     RefactorPlan,
-    RiskLevel,
     ScanResult,
     TriageResult,
 )
@@ -154,7 +153,7 @@ def run_apply(
 
     plan, issue, task_dir = loaded
     print(format_apply_confirmation(plan, issue))
-    if not _confirm_apply(plan, assume_yes=assume_yes):
+    if not _confirm_action("是否应用该重构？[y/N] ", assume_yes=assume_yes):
         print("已取消 apply，未写入任何文件。")
         return 1
 
@@ -369,7 +368,7 @@ def format_scan_issues(issues: list[RefactorIssue], warnings: list[str], saved_p
                 f"{issue.file_path}:{issue.start_line} {issue.symbol or ''}".rstrip()
             )
             lines.append(f"  建议: {issue.suggested_refactoring}")
-            lines.append(f"  自动化适用: {_yes_no(issue.auto_applicable)} | 风险: {issue.risk_level}")
+            lines.append(f"  风险: {issue.risk_level}")
     else:
         lines.append("- 未发现阶段二规则覆盖的坏味道。")
 
@@ -494,16 +493,6 @@ def format_rollback_result(result) -> str:
         f"- 说明: {result.message}",
     ]
     return "\n".join(lines)
-
-
-def _confirm_apply(plan: RefactorPlan, *, assume_yes: bool) -> bool:
-    if assume_yes and plan.risk_level == RiskLevel.LOW:
-        return True
-    try:
-        answer = input("是否应用该重构？[y/N] ").strip().lower()
-    except (EOFError, OSError):
-        return False
-    return answer in {"y", "yes"}
 
 
 def _confirm_action(prompt: str, *, assume_yes: bool) -> bool:

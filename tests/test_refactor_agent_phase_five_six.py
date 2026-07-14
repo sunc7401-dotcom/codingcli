@@ -142,9 +142,7 @@ def _dead_code_issue(source_path: Path) -> RefactorIssue:
         impact="dead private code adds noise",
         recommendation="remove dead code",
         suggested_refactoring=RefactoringType.REMOVE_DEAD_CODE,
-        auto_applicable=True,
         risk_level=RiskLevel.LOW,
-        requires_review=False,
     )
 
 
@@ -168,7 +166,6 @@ def _save_plan(tmp_path: Path, issue: RefactorIssue) -> None:
             needs_characterization_test=True,
             recommendation="add characterization test",
         ),
-        requires_user_confirmation=True,
         context=JavaContext(
             issue_id=issue.id,
             target_file=issue.file_path,

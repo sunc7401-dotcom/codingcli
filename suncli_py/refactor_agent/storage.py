@@ -158,7 +158,6 @@ def _format_plan_markdown(plan: RefactorPlan) -> str:
         f"- Goal: {plan.goal}",
         f"- Refactoring: {plan.refactoring_type}",
         f"- Risk: {plan.risk_level}",
-        f"- Requires confirmation: {'yes' if plan.requires_user_confirmation else 'no'}",
         "",
         "## Files To Modify",
         *[f"- {file_path}" for file_path in plan.files_to_modify],

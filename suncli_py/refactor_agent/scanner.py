@@ -134,9 +134,7 @@ class JavaSmellScanner:
                 impact=issue.impact,
                 recommendation=issue.recommendation,
                 suggested_refactoring=issue.suggested_refactoring,
-                auto_applicable=issue.auto_applicable,
                 risk_level=issue.risk_level,
-                requires_review=issue.requires_review,
             )
             for index, issue in enumerate(sorted_issues, start=1)
         ]
@@ -245,9 +243,7 @@ class JavaSmellScanner:
                         "长方法会让职责边界模糊，增加理解、测试和安全重构成本。",
                         "优先识别连续的业务步骤并使用 Extract Method 小步拆分。",
                         RefactoringType.EXTRACT_METHOD,
-                        auto_applicable=severity != Severity.HIGH,
                         risk_level=RiskLevel.MEDIUM if severity == Severity.MEDIUM else RiskLevel.HIGH,
-                        requires_review=severity == Severity.HIGH,
                     )
                 )
         return issues
@@ -290,11 +286,9 @@ class JavaSmellScanner:
                             )
                         ],
                         "过大类通常承担多种职责，会放大修改影响面并降低内聚性。",
-                        "优先生成 Extract Class / Move Method 计划，MVP 默认不自动执行。",
+                        "优先生成 Extract Class / Move Method 计划，并在用户确认后按计划执行。",
                         RefactoringType.EXTRACT_CLASS,
-                        auto_applicable=False,
                         risk_level=RiskLevel.HIGH,
-                        requires_review=True,
                     )
                 )
         return issues
@@ -318,9 +312,7 @@ class JavaSmellScanner:
                             "深层嵌套会隐藏边界条件，增加遗漏分支和回归风险。",
                             "优先使用 Guard Clauses 或 Extract Method 分解条件逻辑。",
                             RefactoringType.INTRODUCE_EXPLAINING_VARIABLE,
-                            auto_applicable=False,
                             risk_level=RiskLevel.MEDIUM,
-                            requires_review=True,
                         )
                     )
                     continue
@@ -346,9 +338,7 @@ class JavaSmellScanner:
                             "复杂条件降低可读性，也让测试用例更难覆盖所有组合。",
                             "提取解释性变量或小方法，给关键业务判断命名。",
                             RefactoringType.INTRODUCE_EXPLAINING_VARIABLE,
-                            auto_applicable=severity == Severity.LOW,
                             risk_level=RiskLevel.LOW if severity == Severity.LOW else RiskLevel.MEDIUM,
-                            requires_review=severity != Severity.LOW,
                         )
                     )
         return issues
@@ -415,9 +405,7 @@ class JavaSmellScanner:
             "命名不清晰会让代码意图依赖上下文猜测，增加维护和 Review 成本。",
             recommendation,
             RefactoringType.RENAME,
-            auto_applicable=True,
             risk_level=RiskLevel.LOW,
-            requires_review=False,
         )
 
     def _scan_dead_code(self, analyses: list[JavaFileAnalysis]) -> list[RefactorIssue]:
@@ -462,9 +450,7 @@ class JavaSmellScanner:
                         "无用 private 代码会增加阅读负担，也可能误导后续重构判断。",
                         "确认无反射或框架调用后使用 Remove Dead Code。",
                         RefactoringType.REMOVE_DEAD_CODE,
-                        auto_applicable=True,
                         risk_level=RiskLevel.LOW,
-                        requires_review=False,
                     )
                 )
         return issues
@@ -538,9 +524,7 @@ class JavaSmellScanner:
                         "Feature Envy 通常说明方法逻辑更依赖其它类型的数据或行为，可能导致职责放错位置。",
                         "优先评估 Move Method、Extract Method 或把外部数据访问封装到目标类型内。",
                         RefactoringType.MOVE_METHOD,
-                        auto_applicable=False,
                         risk_level=RiskLevel.MEDIUM,
-                        requires_review=True,
                     )
                 )
         return issues
@@ -576,9 +560,7 @@ def _issue(
     recommendation: str,
     suggested_refactoring: RefactoringType,
     *,
-    auto_applicable: bool,
     risk_level: RiskLevel,
-    requires_review: bool,
 ) -> RefactorIssue:
     return RefactorIssue(
         id="",
@@ -592,9 +574,7 @@ def _issue(
         impact=impact,
         recommendation=recommendation,
         suggested_refactoring=suggested_refactoring,
-        auto_applicable=auto_applicable,
         risk_level=risk_level,
-        requires_review=requires_review,
     )
 
 
@@ -698,7 +678,5 @@ def _cpd_issue(line_count: int, locations: list[tuple[str, int]]) -> RefactorIss
         "重复代码会让缺陷修复和规则调整需要多处同步，容易出现行为漂移。",
         "优先考虑 Extract Method 或提取共享逻辑。",
         RefactoringType.REPLACE_DUPLICATE_LOGIC,
-        auto_applicable=False,
         risk_level=RiskLevel.MEDIUM,
-        requires_review=True,
     )

@@ -34,13 +34,12 @@ class RefactorPlanner:
             refactoring_type=issue.suggested_refactoring,
             files_to_modify=_files_to_modify(issue),
             expected_changes=_expected_changes(issue),
-            out_of_scope=_out_of_scope(issue),
+            out_of_scope=_out_of_scope(),
             risk_level=_effective_risk(issue.risk_level, coverage),
             risk_reasons=_risk_reasons(issue, coverage, profile.is_git_clean),
             verification_commands=["mvn -q -DskipTests compile", "mvn test"],
             rollback_strategy="应用阶段将创建任务级快照；回滚时只恢复本任务计划内文件，不使用 git reset --hard。",
             coverage_assessment=coverage,
-            requires_user_confirmation=True,
             context=context,
             planning_source="rule-fallback",
         )
@@ -83,8 +82,8 @@ def _expected_changes(issue: RefactorIssue) -> list[str]:
             ]
         case RefactoringType.EXTRACT_CLASS:
             return [
-                "阶段三只生成拆分类职责建议，不在 MVP 默认自动应用 Extract Class。",
-                "后续 apply 阶段应要求强确认和测试覆盖检查。",
+                "按职责边界拆分类，并保持现有外部行为不变。",
+                "apply 前向用户展示风险、修改文件和验证方案。",
             ]
         case RefactoringType.INTRODUCE_EXPLAINING_VARIABLE:
             return [
@@ -94,7 +93,7 @@ def _expected_changes(issue: RefactorIssue) -> list[str]:
         case RefactoringType.MOVE_METHOD:
             return [
                 "分析目标方法依赖的外部类型和本类状态。",
-                "MVP 默认只生成 Move Method / Extract Method 计划，不自动跨类移动代码。",
+                "在计划文件范围内执行 Move Method / Extract Method。",
                 "保留当前 public API，必要时通过委托方法维持兼容。",
             ]
         case RefactoringType.REPLACE_DUPLICATE_LOGIC:
@@ -114,15 +113,12 @@ def _expected_changes(issue: RefactorIssue) -> list[str]:
             ]
 
 
-def _out_of_scope(issue: RefactorIssue) -> list[str]:
-    common = [
+def _out_of_scope() -> list[str]:
+    return [
         "不格式化整个项目。",
         "不修改计划文件之外的文件。",
         "不改变外部可见行为。",
     ]
-    if issue.risk_level == RiskLevel.HIGH:
-        common.append("高风险重构在 MVP 中默认只输出计划，不自动应用。")
-    return common
 
 
 def _assess_coverage(issue: RefactorIssue, context: JavaContext) -> CoverageAssessment:
@@ -159,6 +155,4 @@ def _risk_reasons(issue: RefactorIssue, coverage: CoverageAssessment, is_git_cle
         reasons.append("未发现相关测试类，mvn test 通过也不一定覆盖本次修改。")
     if not is_git_clean:
         reasons.append("Git 工作区不干净，apply 前必须再次确认并记录快照。")
-    if issue.requires_review:
-        reasons.append("该 issue 标记为需要人工重点 Review。")
     return reasons

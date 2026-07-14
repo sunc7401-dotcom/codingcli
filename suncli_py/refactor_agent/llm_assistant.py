@@ -82,7 +82,7 @@ class RefactorLlmAssistant:
                     '"severity":"low|medium|high","risk_level":"low|medium|high",'
                     '"suggested_refactoring":"Extract Method|Extract Class|Introduce Explaining Variable|'
                     'Move Method|Replace Duplicate Logic With Shared Method|Remove Dead Code|'
-                    'Rename Variable / Method / Class","auto_applicable":false,"requires_review":true,'
+                    'Rename Variable / Method / Class",'
                     '"impact":"...","recommendation":"...","proposed_solution":"...",'
                     '"verification_strategy":["..."]}. '
                     "Do not accept a candidate without concrete source_evidence.\n"
@@ -106,8 +106,6 @@ class RefactorLlmAssistant:
                         suggested_refactoring=_enum_value(
                             RefactoringType, data.get("suggested_refactoring"), issue.suggested_refactoring
                         ),
-                        auto_applicable=bool(data.get("auto_applicable", issue.auto_applicable)),
-                        requires_review=bool(data.get("requires_review", issue.requires_review)),
                         impact=str(data.get("impact") or issue.impact),
                         recommendation=str(
                             data.get("recommendation") or decision.proposed_solution or issue.recommendation
@@ -151,7 +149,6 @@ class RefactorLlmAssistant:
                 '"suggested_refactoring":"Extract Method|Extract Class|Introduce Explaining Variable|'
                 'Move Method|Replace Duplicate Logic With Shared Method|Remove Dead Code|'
                 'Rename Variable / Method / Class",'
-                '"auto_applicable":true,"requires_review":false,'
                 '"impact":"...","recommendation":"...","decision_reason":"..."}]}.\n'
                 + toolbox.as_json(toolbox.issue_candidates(issues, limit=limit))
             ),
@@ -183,8 +180,6 @@ class RefactorLlmAssistant:
                             decision.get("suggested_refactoring"),
                             issue.suggested_refactoring,
                         ),
-                        auto_applicable=bool(decision.get("auto_applicable", issue.auto_applicable)),
-                        requires_review=bool(decision.get("requires_review", issue.requires_review)),
                         impact=str(decision.get("impact") or issue.impact),
                         recommendation=str(decision.get("recommendation") or issue.recommendation),
                         evidence=[
