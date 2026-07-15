@@ -233,6 +233,8 @@ class CoverageAssessment:
     changed_lines_covered: int = 0
     coverage_ratio: float = 0.0
     generated_tests: list[str] = field(default_factory=list)
+    target_file_lines_total: int = 0
+    target_file_lines_covered: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -250,6 +252,8 @@ class CoverageAssessment:
             changed_lines_covered=int(data.get("changed_lines_covered", 0)),
             coverage_ratio=float(data.get("coverage_ratio", 0.0)),
             generated_tests=list(data.get("generated_tests", [])),
+            target_file_lines_total=int(data.get("target_file_lines_total", 0)),
+            target_file_lines_covered=int(data.get("target_file_lines_covered", 0)),
         )
 
 
@@ -321,6 +325,11 @@ class VerificationResult:
     static_findings: list[str] = field(default_factory=list)
     diff_summary: str = ""
     message: str = ""
+    approved: bool | None = None
+    decision_source: str = "deterministic"
+    issues: list[str] = field(default_factory=list)
+    suggestions: list[str] = field(default_factory=list)
+    attempt: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -330,6 +339,11 @@ class VerificationResult:
             "static_findings": self.static_findings,
             "diff_summary": self.diff_summary,
             "message": self.message,
+            "approved": self.approved if self.approved is not None else self.status in {"passed", "warning"},
+            "decision_source": self.decision_source,
+            "issues": self.issues,
+            "suggestions": self.suggestions,
+            "attempt": self.attempt,
         }
 
     @classmethod
@@ -341,6 +355,45 @@ class VerificationResult:
             static_findings=list(data.get("static_findings", [])),
             diff_summary=data.get("diff_summary", ""),
             message=data.get("message", ""),
+            approved=bool(data["approved"]) if "approved" in data else data.get("status") in {"passed", "warning"},
+            decision_source=str(data.get("decision_source", "deterministic")),
+            issues=list(data.get("issues", [])),
+            suggestions=list(data.get("suggestions", [])),
+            attempt=max(1, int(data.get("attempt", 1))),
+        )
+
+
+@dataclass(frozen=True)
+class PreModificationResult:
+    status: str
+    commands: list[CommandResult]
+    coverage: CoverageAssessment
+    requires_test_generation: bool
+    message: str
+    infrastructure_error: str = ""
+    generated_tests: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "commands": [command.to_dict() for command in self.commands],
+            "coverage": self.coverage.to_dict(),
+            "requires_test_generation": self.requires_test_generation,
+            "message": self.message,
+            "infrastructure_error": self.infrastructure_error,
+            "generated_tests": self.generated_tests,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PreModificationResult:
+        return cls(
+            status=str(data["status"]),
+            commands=[CommandResult.from_dict(command) for command in data.get("commands", [])],
+            coverage=CoverageAssessment.from_dict(data["coverage"]),
+            requires_test_generation=bool(data.get("requires_test_generation", False)),
+            message=str(data.get("message", "")),
+            infrastructure_error=str(data.get("infrastructure_error", "")),
+            generated_tests=list(data.get("generated_tests", [])),
         )
 
 

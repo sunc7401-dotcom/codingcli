@@ -59,22 +59,37 @@ class RefactorPatcher:
             return [self._extract_accumulator_method(issue)]
         raise PatchError("MVP only supports Remove Dead Code, controlled LLM edits, and conservative Extract Method.")
 
+    def ensure_initial_snapshot(self, plan: RefactorPlan, task_dir: Path) -> Path:
+        """Create the immutable production-file snapshot before pre-modification work starts."""
+        snapshot_paths = {
+            _normalize_relative_path(file_path): self._resolve_allowed_file(file_path)
+            for file_path in plan.files_to_modify
+        }
+        snapshot_contents = {
+            file_path: path.read_text(encoding="utf-8") for file_path, path in snapshot_paths.items()
+        }
+        return self._write_snapshot(plan, snapshot_contents, snapshot_paths, task_dir)
+
     def apply_changes(
         self,
         plan: RefactorPlan,
         changes: list[PatchChange],
         task_dir: Path,
+        *,
+        artifact_dir: Path | None = None,
     ) -> PatchApplicationResult:
         if not changes:
             raise PatchError("No patch changes to apply.")
 
-        before_contents = {change.file_path: change.before_text for change in changes}
         resolved_paths = {change.file_path: self._resolve_allowed_file(change.file_path) for change in changes}
-        snapshot_path = self._write_snapshot(plan, before_contents, resolved_paths, task_dir)
+        snapshot_path = self.ensure_initial_snapshot(plan, task_dir)
         diff_text = _format_unified_diff(changes)
-        patch_path = task_dir / "patch.diff"
-        diff_summary_path = task_dir / "diff_summary.txt"
+        output_dir = artifact_dir or task_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        patch_path = output_dir / "patch.diff"
+        diff_summary_path = output_dir / "diff_summary.txt"
         patch_path.write_text(diff_text, encoding="utf-8")
+        (task_dir / "patch.diff").write_text(diff_text, encoding="utf-8")
 
         written: list[Path] = []
         try:
@@ -99,6 +114,7 @@ class RefactorPatcher:
 
         self._write_after_state(task_dir, resolved_paths)
         diff_summary_path.write_text(diff_text, encoding="utf-8")
+        (task_dir / "diff_summary.txt").write_text(diff_text, encoding="utf-8")
         return PatchApplicationResult(
             patch_path=patch_path,
             snapshot_path=snapshot_path,
@@ -230,6 +246,9 @@ class RefactorPatcher:
         task_dir: Path,
     ) -> Path:
         task_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_path = task_dir / "snapshot.json"
+        if snapshot_path.is_file():
+            return snapshot_path
         before_dir = task_dir / "before"
         before_dir.mkdir(parents=True, exist_ok=True)
         for file_path, source_path in resolved_paths.items():
@@ -255,28 +274,29 @@ class RefactorPatcher:
                 for file_path, content in before_contents.items()
             ],
         }
-        snapshot_path = task_dir / "snapshot.json"
         snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
         return snapshot_path
 
     def _write_after_state(self, task_dir: Path, resolved_paths: dict[str, Path]) -> None:
         after_dir = task_dir / "after"
         after_dir.mkdir(parents=True, exist_ok=True)
-        snapshot_path = task_dir / "snapshot.json"
-        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
-        after_by_path: dict[str, dict[str, str]] = {}
+        after_files: list[dict[str, str]] = []
         for file_path, source_path in resolved_paths.items():
             destination = after_dir / file_path
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source_path, destination)
             text = source_path.read_text(encoding="utf-8")
-            after_by_path[file_path] = {
-                "after_sha256": _sha256(text),
-                "after_copy": str(destination.relative_to(task_dir).as_posix()),
-            }
-        for file_entry in snapshot.get("files", []):
-            file_entry.update(after_by_path.get(file_entry.get("path"), {}))
-        snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+            after_files.append(
+                {
+                    "path": file_path,
+                    "after_sha256": _sha256(text),
+                    "after_copy": str(destination.relative_to(task_dir).as_posix()),
+                }
+            )
+        (task_dir / "after_state.json").write_text(
+            json.dumps({"files": after_files}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     def _run_git(self, command: list[str]) -> str | None:
         try:

@@ -17,13 +17,14 @@ from suncli_py.refactor_agent.core.models import (
     SmellType,
 )
 from suncli_py.refactor_agent.core.storage import RefactorAgentStorage
-from suncli_py.refactor_agent.interface.commands import run_apply, run_characterize, run_rollback, run_verify
+from suncli_py.refactor_agent.execution.patch_validator import AstPatchValidator
+from suncli_py.refactor_agent.execution.patcher import RefactorPatcher
+from suncli_py.refactor_agent.execution.verifier import VerificationPipeline
+from suncli_py.refactor_agent.interface.commands import run_characterize, run_rollback
 
 
-def test_verify_runs_maven_and_records_jacoco_coverage(
+def test_verification_pipeline_runs_maven_and_records_jacoco_coverage(
     tmp_path: Path,
-    monkeypatch,
-    capsys,
 ) -> None:
     source_path = _write_java_file(tmp_path)
     issue = _dead_code_issue(source_path)
@@ -35,19 +36,13 @@ def test_verify_runs_maven_and_records_jacoco_coverage(
         encoding="utf-8",
     )
     (task_dir / "diff_summary.txt").write_text("summary", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
+    result = VerificationPipeline(tmp_path, command_runner=_successful_runner).verify(
+        RefactorAgentStorage(tmp_path).load_task_plan(task_dir)[0], issue, task_dir
+    )
 
-    exit_code = run_verify(issue_id="RA-0001", command_runner=_successful_runner)
-
-    assert exit_code == 0
-    output = capsys.readouterr().out
-    assert "verify passed" in output
-    verification = json.loads((task_dir / "verification.json").read_text(encoding="utf-8"))
-    assert verification["status"] == "passed"
-    assert verification["coverage"]["jacoco_report_found"] is True
-    assert verification["coverage"]["changed_lines_covered"] == 3
-    assert (task_dir / "report.md").is_file()
-    assert (tmp_path / ".paicli" / "refactor-agent" / "reports" / "latest.md").is_file()
+    assert result.status == "passed"
+    assert result.coverage.jacoco_report_found is True
+    assert result.coverage.changed_lines_covered == 3
 
 
 def test_characterize_writes_candidate_test_after_confirmation_and_precheck(
@@ -78,7 +73,27 @@ def test_rollback_detects_conflict_then_restores_with_confirmation(
     issue = _dead_code_issue(source_path)
     _save_plan(tmp_path, issue)
     monkeypatch.chdir(tmp_path)
-    assert run_apply(issue_id="RA-0001", assume_yes=True, llm_assistant=_FakePatchAssistant(issue)) == 0
+    monkeypatch.setattr(AstPatchValidator, "validate", lambda self, plan, task_dir: [])
+    storage = RefactorAgentStorage(tmp_path)
+    task_dir = next((tmp_path / ".paicli" / "refactor-agent" / "tasks").iterdir())
+    plan, _ = storage.load_task_plan(task_dir)
+    patcher = RefactorPatcher(tmp_path)
+    changes = patcher.generate_changes(
+        plan,
+        issue,
+        llm_edit_plan={
+            "edits": [
+                {
+                    "file_path": issue.file_path,
+                    "start_line": issue.start_line,
+                    "end_line": issue.end_line,
+                    "replacement": "",
+                }
+            ],
+            "explanation": "remove dead code",
+        },
+    )
+    patcher.apply_changes(plan, changes, task_dir)
     assert "unusedPrivate" not in source_path.read_text(encoding="utf-8")
 
     source_path.write_text(source_path.read_text(encoding="utf-8").replace("input + 1", "input + 2"), encoding="utf-8")
@@ -90,7 +105,6 @@ def test_rollback_detects_conflict_then_restores_with_confirmation(
     restored = source_path.read_text(encoding="utf-8")
     assert "unusedPrivate" in restored
     assert "input + 1" in restored
-    task_dir = next((tmp_path / ".paicli" / "refactor-agent" / "tasks").iterdir())
     rollback = json.loads((task_dir / "rollback.json").read_text(encoding="utf-8"))
     assert rollback["status"] == "rolled_back"
     report = (task_dir / "report.md").read_text(encoding="utf-8")
@@ -196,22 +210,3 @@ def _write_jacoco_xml(root: Path, start_line: int) -> None:
 """.strip(),
         encoding="utf-8",
     )
-
-
-class _FakePatchAssistant:
-    def __init__(self, issue: RefactorIssue) -> None:
-        self.issue = issue
-
-    def generate_edit_plan(self, plan: RefactorPlan, issue: RefactorIssue) -> dict:
-        del plan, issue
-        return {
-            "edits": [
-                {
-                    "file_path": self.issue.file_path,
-                    "start_line": self.issue.start_line,
-                    "end_line": self.issue.end_line,
-                    "replacement": "",
-                }
-            ],
-            "explanation": "LLM removes dead private method",
-        }

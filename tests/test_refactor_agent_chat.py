@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from suncli_py.llm.models import ChatResponse
 from suncli_py.memory.storage import LongTermMemory
 from suncli_py.refactor_agent.core.models import (
@@ -23,6 +25,11 @@ def test_cli_registers_chat_command() -> None:
     args = build_parser().parse_args(["chat"])
 
     assert args.command == "chat"
+
+
+def test_cli_no_longer_registers_standalone_verify() -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["verify", "--issue", "RA-0001"])
 
 
 def test_chat_routes_commands_and_keeps_selected_issue(tmp_path: Path) -> None:
@@ -55,10 +62,6 @@ def test_chat_routes_commands_and_keeps_selected_issue(tmp_path: Path) -> None:
         calls.append(("apply", kwargs))
         return 0
 
-    def verify_handler(**kwargs) -> int:
-        calls.append(("verify", kwargs))
-        return 0
-
     def rollback_handler(**kwargs) -> int:
         calls.append(("rollback", kwargs))
         return 0
@@ -72,7 +75,6 @@ def test_chat_routes_commands_and_keeps_selected_issue(tmp_path: Path) -> None:
         scan_handler=scan_handler,
         plan_handler=plan_handler,
         apply_handler=apply_handler,
-        verify_handler=verify_handler,
         rollback_handler=rollback_handler,
         report_handler=report_handler,
         printer=outputs.append,
@@ -90,11 +92,11 @@ def test_chat_routes_commands_and_keeps_selected_issue(tmp_path: Path) -> None:
         ("scan", {"output_format": "text"}),
         ("plan", {"issue_id": "RA-0001"}),
         ("apply", {"issue_id": "RA-0001", "assume_yes": True, "max_repair_attempts": 2}),
-        ("verify", {"issue_id": "RA-0001"}),
         ("report", {"task_id": None, "latest": True}),
         ("rollback", {"task_id": None, "assume_yes": True}),
     ]
     assert any("Selected issue: RA-0001" in output for output in outputs)
+    assert any("独立 verify 已取消" in output for output in outputs)
 
 
 def test_chat_lists_issues_and_selects_first_issue(tmp_path: Path) -> None:

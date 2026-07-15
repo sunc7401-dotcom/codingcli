@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import builtins
 import threading
 from collections.abc import Sequence
 from pathlib import Path
@@ -34,7 +33,7 @@ from suncli_py.refactor_agent.core.models import (
     SmellType,
 )
 from suncli_py.refactor_agent.core.storage import RefactorAgentStorage
-from suncli_py.refactor_agent.interface.commands import RefactorAgentError, run_apply, run_plan, run_scan
+from suncli_py.refactor_agent.interface.commands import run_plan, run_scan
 
 
 def test_content_part_defaults_and_factories_do_not_shadow_fields() -> None:
@@ -325,187 +324,6 @@ def test_llm_executes_multiple_tool_calls_in_parallel(
     assert "Completed 2 tool(s)" in log_text
 
 
-def test_apply_uses_llm_controlled_edit_operations(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source_path = _write_dead_code_java_file(tmp_path)
-    issue = _dead_code_issue(source_path)
-    _save_plan(tmp_path, _plan(issue), issue)
-    monkeypatch.chdir(tmp_path)
-
-    exit_code = run_apply(
-        issue_id=issue.id,
-        assume_yes=True,
-        llm_assistant=_FakePatchAssistant(
-            {
-                "edits": [
-                    {
-                        "file_path": issue.file_path,
-                        "start_line": issue.start_line,
-                        "end_line": issue.end_line,
-                        "replacement": "",
-                    }
-                ],
-                "explanation": "LLM removes dead private method",
-            }
-        ),
-    )
-
-    assert exit_code == 0
-    updated = source_path.read_text(encoding="utf-8")
-    assert "unusedPrivate" not in updated
-    assert "createOrder" in updated
-
-
-def test_apply_repairs_failed_verification_with_llm_loop(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source_path = _write_dead_code_java_file(tmp_path)
-    issue = _dead_code_issue(source_path)
-    _save_plan(tmp_path, _plan(issue), issue)
-    monkeypatch.chdir(tmp_path)
-    return_line = next(
-        index
-        for index, line in enumerate(source_path.read_text(encoding="utf-8").splitlines(), start=1)
-        if "return input + 1" in line
-    )
-
-    assistant = _FakePatchAssistant(
-        {
-            "edits": [
-                {
-                    "file_path": issue.file_path,
-                    "start_line": return_line,
-                    "end_line": return_line,
-                    "replacement": "        return missingSymbol;",
-                }
-            ],
-            "explanation": "bad first edit leaves an unresolved symbol",
-        },
-        repair_plan={
-            "edits": [
-                {
-                    "file_path": issue.file_path,
-                    "start_line": issue.start_line,
-                    "end_line": issue.end_line,
-                    "replacement": "",
-                }
-            ],
-            "explanation": "repair only removes the private method",
-        },
-    )
-
-    exit_code = run_apply(
-        issue_id=issue.id,
-        assume_yes=True,
-        llm_assistant=assistant,
-        max_repair_attempts=1,
-        command_runner=_FailOnceRunner(),
-    )
-
-    assert exit_code == 0
-    assert assistant.repair_calls == 1
-    updated = source_path.read_text(encoding="utf-8")
-    assert "unusedPrivate" not in updated
-    assert "createOrder" in updated
-
-
-def test_ast_patch_validator_rejects_llm_public_signature_change(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source_path = _write_dead_code_java_file(tmp_path)
-    issue = _dead_code_issue(source_path)
-    _save_plan(tmp_path, _plan(issue), issue)
-    original = source_path.read_text(encoding="utf-8")
-    public_line = next(
-        index
-        for index, line in enumerate(original.splitlines(), start=1)
-        if "public int createOrder" in line
-    )
-    monkeypatch.chdir(tmp_path)
-
-    with pytest.raises(RefactorAgentError, match="AST patch validation failed"):
-        run_apply(
-            issue_id=issue.id,
-            assume_yes=True,
-            llm_assistant=_FakePatchAssistant(
-                {
-                    "edits": [
-                        {
-                            "file_path": issue.file_path,
-                            "start_line": public_line,
-                            "end_line": public_line,
-                            "replacement": "    public long createOrder(int input) {",
-                        }
-                    ],
-                    "explanation": "unsafe public API edit",
-                }
-            ),
-        )
-
-    assert source_path.read_text(encoding="utf-8") == original
-
-
-def test_apply_extracts_conservative_method_for_long_method(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source_path = _write_long_method_java_file(tmp_path)
-    issue = _long_method_issue(source_path)
-    _save_plan(
-        tmp_path,
-        _plan(
-            issue,
-            risk_level=RiskLevel.MEDIUM,
-            refactoring_type=RefactoringType.EXTRACT_METHOD,
-        ),
-        issue,
-    )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(builtins, "input", lambda _: "y")
-
-    replacement = """    public int huge(int input) {
-        int total = input;
-        total = extractedHugeStep(total);
-        return total;
-    }
-
-    private int extractedHugeStep(int total) {
-        total += 1;
-        total += 2;
-        total += 3;
-        total += 4;
-        total += 5;
-        total += 6;
-        return total;
-    }"""
-    exit_code = run_apply(
-        issue_id=issue.id,
-        llm_assistant=_FakePatchAssistant(
-            {
-                "edits": [
-                    {
-                        "file_path": issue.file_path,
-                        "start_line": issue.start_line,
-                        "end_line": issue.end_line,
-                        "replacement": replacement,
-                    }
-                ],
-                "explanation": "LLM extracts accumulator block into private helper",
-            }
-        ),
-    )
-
-    assert exit_code == 0
-    updated = source_path.read_text(encoding="utf-8")
-    assert "total = extractedHugeStep(total);" in updated
-    assert "private int extractedHugeStep(int total)" in updated
-    assert "public int huge(int input)" in updated
-
-
 class _FakeLlmClient:
     def __init__(self, responses: list[str | ChatResponse]) -> None:
         self._responses = responses
@@ -528,22 +346,6 @@ class _FailingLlmClient:
     async def chat(self, *, messages, tools=None) -> ChatResponse:
         del messages, tools
         raise self.error
-
-
-class _FakePatchAssistant:
-    def __init__(self, edit_plan: dict, repair_plan: dict | None = None) -> None:
-        self.edit_plan = edit_plan
-        self.repair_plan = repair_plan
-        self.repair_calls = 0
-
-    def generate_edit_plan(self, plan: RefactorPlan, issue: RefactorIssue) -> dict:
-        del plan, issue
-        return self.edit_plan
-
-    def generate_repair_edit_plan(self, root, plan, issue, verification, *, attempt: int) -> dict | None:
-        del root, plan, issue, verification, attempt
-        self.repair_calls += 1
-        return self.repair_plan
 
 
 class _FakeDecisionAssistant:

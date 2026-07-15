@@ -12,7 +12,6 @@ from suncli_py.refactor_agent.interface.commands import (
     run_report,
     run_rollback,
     run_scan,
-    run_verify,
 )
 
 
@@ -26,22 +25,19 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser = subparsers.add_parser("plan", help="generate an LLM-authored refactoring plan for an issue")
     plan_parser.add_argument("--issue", required=True, help="issue id, for example RA-0001")
 
-    apply_parser = subparsers.add_parser("apply", help="apply the confirmed LLM edit plan")
+    apply_parser = subparsers.add_parser("apply", help="run the modifier agent and automatic verifier")
     apply_parser.add_argument("--issue", required=True, help="issue id, for example RA-0001")
     apply_parser.add_argument("--yes", action="store_true", help="skip confirmation for low-risk tasks")
     apply_parser.add_argument(
         "--max-repair-attempts",
         type=int,
-        default=1,
-        help="verify after apply and ask the LLM to repair failed compile/test runs up to N times",
+        default=2,
+        help="automatically verify after apply and let the modifier agent repair rejection up to N times",
     )
 
     characterize_parser = subparsers.add_parser("characterize", help="generate candidate characterization test")
     characterize_parser.add_argument("--issue", required=True, help="issue id, for example RA-0001")
     characterize_parser.add_argument("--yes", action="store_true", help="write the candidate test without prompting")
-
-    verify_parser = subparsers.add_parser("verify", help="run Maven verification and coverage awareness")
-    verify_parser.add_argument("--issue", help="issue id; defaults to the latest task")
 
     rollback_parser = subparsers.add_parser("rollback", help="restore planned files from the task snapshot")
     rollback_parser.add_argument("--task", help="task id; defaults to the latest task")
@@ -94,8 +90,6 @@ def main() -> None:
             )
         if args.command == "characterize":
             raise SystemExit(run_characterize(issue_id=args.issue, assume_yes=args.yes))
-        if args.command == "verify":
-            raise SystemExit(run_verify(issue_id=args.issue))
         if args.command == "rollback":
             raise SystemExit(run_rollback(task_id=args.task, assume_yes=args.yes))
         if args.command == "report":

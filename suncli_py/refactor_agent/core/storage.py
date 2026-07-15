@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from suncli_py.refactor_agent.core.models import (
     CandidateDecision,
     CharacterizationTestPlan,
+    PreModificationResult,
     RefactorIssue,
     RefactorPlan,
     RollbackResult,
@@ -72,6 +74,22 @@ class RefactorAgentStorage:
     def task_dir(self, task_id: str) -> Path:
         return self.base_dir / "tasks" / task_id
 
+    def attempt_dir(self, task_dir: Path, attempt: int) -> Path:
+        path = task_dir / "attempts" / f"{max(1, attempt):02d}"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def save_attempt_record(self, attempt_dir: Path, name: str, payload: dict[str, Any]) -> Path:
+        path = attempt_dir / name
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
+    def append_agent_message(self, task_dir: Path, payload: dict[str, Any]) -> Path:
+        path = task_dir / "agent_messages.jsonl"
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        return path
+
     def latest_task_dir(self) -> Path | None:
         tasks_dir = self.base_dir / "tasks"
         if not tasks_dir.is_dir():
@@ -116,10 +134,41 @@ class RefactorAgentStorage:
         issue_data = json.loads((task_dir / "issue.json").read_text(encoding="utf-8"))
         return RefactorPlan.from_dict(plan_data), RefactorIssue.from_dict(issue_data)
 
-    def save_verification(self, task_dir: Path, result: VerificationResult) -> Path:
+    def save_verification(
+        self,
+        task_dir: Path,
+        result: VerificationResult,
+        *,
+        attempt_dir: Path | None = None,
+    ) -> Path:
         path = task_dir / "verification.json"
-        path.write_text(json.dumps(result.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        text = json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
+        path.write_text(text, encoding="utf-8")
+        if attempt_dir is not None:
+            attempt_dir.mkdir(parents=True, exist_ok=True)
+            (attempt_dir / "verification.json").write_text(text, encoding="utf-8")
         return path
+
+    def save_pre_modification(
+        self,
+        task_dir: Path,
+        result: PreModificationResult,
+        *,
+        preflight_dir: Path | None = None,
+    ) -> Path:
+        text = json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
+        path = task_dir / "pre_modification.json"
+        path.write_text(text, encoding="utf-8")
+        if preflight_dir is not None:
+            preflight_dir.mkdir(parents=True, exist_ok=True)
+            (preflight_dir / "pre_modification.json").write_text(text, encoding="utf-8")
+        return path
+
+    def load_pre_modification(self, task_dir: Path) -> PreModificationResult | None:
+        path = task_dir / "pre_modification.json"
+        if not path.is_file():
+            return None
+        return PreModificationResult.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
     def load_verification(self, task_dir: Path) -> VerificationResult | None:
         path = task_dir / "verification.json"

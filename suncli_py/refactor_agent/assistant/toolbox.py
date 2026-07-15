@@ -234,6 +234,15 @@ class RefactorAgentToolRuntime:
             },
         ]
 
+    def is_read_only(self, name: str) -> bool:
+        return name in {
+            "get_issue_context",
+            "read_file",
+            "search_code",
+            "get_plan_context",
+            "get_verification_feedback",
+        }
+
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
         try:
             if name == "get_issue_context":

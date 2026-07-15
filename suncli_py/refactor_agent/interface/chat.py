@@ -30,7 +30,6 @@ from suncli_py.refactor_agent.interface.commands import (
     run_report,
     run_rollback,
     run_scan,
-    run_verify,
 )
 
 IssueId = str | None
@@ -45,8 +44,7 @@ HELP_TEXT = """Commands:
   select RA-0001
   plan RA-0001
   apply RA-0001
-  apply RA-0001 --yes --max-repair-attempts 1
-  verify RA-0001
+  apply RA-0001 --yes --max-repair-attempts 2
   characterize RA-0001
   characterize RA-0001 --yes
   report
@@ -71,7 +69,6 @@ class RefactorChatSession:
     scan_handler: Callable[..., int] = run_scan
     plan_handler: Callable[..., int] = run_plan
     apply_handler: Callable[..., int] = run_apply
-    verify_handler: Callable[..., int] = run_verify
     characterize_handler: Callable[..., int] = run_characterize
     rollback_handler: Callable[..., int] = run_rollback
     report_handler: Callable[..., int] = run_report
@@ -153,7 +150,7 @@ class RefactorChatSession:
                 self._run_apply(argv)
                 return True
             if command == "verify":
-                self._run_verify(argv)
+                self.printer("独立 verify 已取消；请执行 apply，修改后会自动调用验证 Agent。")
                 return True
             if command == "characterize":
                 self._run_characterize(argv)
@@ -399,12 +396,6 @@ class RefactorChatSession:
         if exit_code == 0:
             self.selected_issue_id = issue_id
 
-    def _run_verify(self, argv: list[str]) -> None:
-        issue_id = _issue_from_argv(argv) or self.selected_issue_id
-        exit_code = self.verify_handler(issue_id=issue_id)
-        if exit_code == 0 and issue_id:
-            self.selected_issue_id = issue_id
-
     def _run_characterize(self, argv: list[str]) -> None:
         issue_id = self._issue_or_selected(argv)
         if issue_id is None:
@@ -494,14 +485,14 @@ def _repair_attempts(argv: list[str]) -> int:
             try:
                 return max(0, int(argv[index + 1]))
             except ValueError:
-                return 1
+                return 2
     for item in argv[1:]:
         if item.startswith("--max-repair-attempts="):
             try:
                 return max(0, int(item.split("=", 1)[1]))
             except ValueError:
-                return 1
-    return 1
+                return 2
+    return 2
 
 
 def _safe_arguments(arguments: str) -> dict[str, Any]:

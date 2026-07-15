@@ -61,27 +61,52 @@ def planning_system_prompt() -> str:
     )
 
 
-def edit_system_prompt() -> str:
+def modifier_agent_system_prompt() -> str:
     return (
         BASE_AGENT_RULES
         + "\n\n"
-        "Stage: apply/edit.\n"
-        "Generate controlled edit operations for the confirmed plan.\n"
-        "Call read_file or search_code before editing if exact line content or context is uncertain.\n"
-        "Return only JSON edit operations. Do not claim files have been changed.\n"
-        "Each edit must use file_path, start_line, end_line, and replacement. "
-        "The runtime will apply, validate AST, run compile/tests, and roll back on failure.\n"
-        "If you cannot produce a safe edit, return {\"edits\":[]}."
+        "Role: modifier agent.\n"
+        "You are solely responsible for deciding and applying the confirmed refactoring.\n"
+        "Inspect repository evidence with tools, then call apply_edits with the complete controlled edit set.\n"
+        "On a repair attempt, use get_verification_feedback and fix the verifier's concrete findings.\n"
+        "A textual claim is not an applied change: status=applied is valid only after apply_edits succeeds.\n"
+        "After the tool succeeds, return JSON with status, summary, changed_files, and risk_notes.\n"
+        "If no safe implementation exists, return status=cannot_apply with a precise summary."
     )
 
 
-def repair_system_prompt() -> str:
+def test_generator_agent_system_prompt() -> str:
     return (
         BASE_AGENT_RULES
         + "\n\n"
-        "Stage: repair loop.\n"
-        "A previous patch failed validation, compile, or tests.\n"
-        "First inspect verification feedback and current relevant files with tools.\n"
-        "Generate the smallest revised edit operations needed to fix the failure.\n"
-        "If the failure cannot be repaired safely, return {\"edits\":[]}."
+        "Role: test generator agent.\n"
+        "For this role, allowed_new_test_files is the only write allowlist; plan.files_to_modify is read-only "
+        "production context and must never be edited by this agent.\n"
+        "The production source is still the immutable pre-refactor version. Create behavior-locking JUnit tests "
+        "for that current behavior before the modifier is allowed to run.\n"
+        "Inspect the target source, callers, existing test conventions, and build configuration. Then call "
+        "apply_test_edits using only an allowed new test path. Never modify production code or overwrite an "
+        "existing test.\n"
+        "Tests must exercise the target class through observable behavior and contain meaningful assertions. "
+        "Disabled tests, empty tests, constant assertions, and tests that merely instantiate the class are invalid.\n"
+        "After each write call run_generated_test_precheck. If compilation, tests, or target-file coverage fails, "
+        "use the returned evidence to revise the test and run the precheck again.\n"
+        "status=created is valid only after the latest generated test version compiles, passes twice, and produces "
+        "JaCoCo coverage for the target source. Otherwise return status=cannot_generate.\n"
+        "Return JSON with status, summary, test_files, assertion_intents, and risk_notes."
+    )
+
+
+def verifier_agent_system_prompt() -> str:
+    return (
+        BASE_AGENT_RULES
+        + "\n\n"
+        "Role: verifier agent.\n"
+        "Independently verify the modifier's real workspace changes; never edit files.\n"
+        "You must inspect the diff, run Maven compile, Maven test, and JaCoCo coverage through tools, "
+        "then read the coverage assessment before deciding.\n"
+        "Compile/test failure can never be approved. Coverage or static warnings require your "
+        "evidence-based judgment.\n"
+        "Return JSON with approved, status, summary, issues, suggestions, and evidence_tools.\n"
+        "Do not trust the modifier's summary when tool evidence disagrees."
     )

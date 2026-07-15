@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import builtins
 import json
+import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
+from suncli_py.llm.models import ChatResponse, ToolCall, _Function
 from suncli_py.refactor_agent.assistant.llm_assistant import RefactorLlmAssistant
 from suncli_py.refactor_agent.core.models import (
     CoverageAssessment,
@@ -19,6 +22,9 @@ from suncli_py.refactor_agent.core.models import (
     SmellType,
 )
 from suncli_py.refactor_agent.core.storage import RefactorAgentStorage
+from suncli_py.refactor_agent.execution.patch_validator import AstPatchValidator
+from suncli_py.refactor_agent.execution.patcher import PatchError, RefactorPatcher
+from suncli_py.refactor_agent.execution.verifier import DEFAULT_VERIFICATION_COMMANDS
 from suncli_py.refactor_agent.interface.commands import RefactorAgentError, run_apply
 
 
@@ -50,8 +56,15 @@ def test_apply_uses_llm_edit_plan_and_writes_snapshot(
     issue = _dead_code_issue(source_path)
     _save_plan(tmp_path, issue, files_to_modify=["src/main/java/demo/OrderService.java"])
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(AstPatchValidator, "validate", lambda self, plan, task_dir: [])
 
-    exit_code = run_apply(issue_id="RA-0001", assume_yes=True, llm_assistant=_FakePatchAssistant(issue))
+    exit_code = run_apply(
+        issue_id="RA-0001",
+        assume_yes=True,
+        llm_assistant=_FakePatchAssistant(issue),
+        max_repair_attempts=0,
+        command_runner=_successful_runner,
+    )
 
     assert exit_code == 0
     updated = source_path.read_text(encoding="utf-8")
@@ -79,8 +92,14 @@ def test_apply_writes_high_risk_change_after_interactive_confirmation(
     _save_plan(tmp_path, issue, files_to_modify=[issue.file_path])
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(builtins, "input", lambda _: "y")
+    monkeypatch.setattr(AstPatchValidator, "validate", lambda self, plan, task_dir: [])
 
-    exit_code = run_apply(issue_id=issue.id, llm_assistant=_FakePatchAssistant(issue))
+    exit_code = run_apply(
+        issue_id=issue.id,
+        llm_assistant=_FakePatchAssistant(issue),
+        max_repair_attempts=0,
+        command_runner=_successful_runner,
+    )
 
     assert exit_code == 0
     assert "unusedPrivate" not in source_path.read_text(encoding="utf-8")
@@ -94,11 +113,14 @@ def test_apply_yes_flag_writes_high_risk_change(
     issue = _dead_code_issue(source_path, risk_level=RiskLevel.HIGH)
     _save_plan(tmp_path, issue, files_to_modify=[issue.file_path])
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(AstPatchValidator, "validate", lambda self, plan, task_dir: [])
 
     exit_code = run_apply(
         issue_id=issue.id,
         assume_yes=True,
         llm_assistant=_FakePatchAssistant(issue),
+        max_repair_attempts=0,
+        command_runner=_successful_runner,
     )
 
     assert exit_code == 0
@@ -130,10 +152,24 @@ def test_apply_rejects_llm_patch_outside_plan_files(
     source_path = _write_java_file(tmp_path)
     issue = _dead_code_issue(source_path)
     _save_plan(tmp_path, issue, files_to_modify=["src/main/java/demo/Other.java"])
-    monkeypatch.chdir(tmp_path)
+    task_dir = next((tmp_path / ".paicli" / "refactor-agent" / "tasks").iterdir())
+    plan, _ = RefactorAgentStorage(tmp_path).load_task_plan(task_dir)
 
-    with pytest.raises(RefactorAgentError, match="outside plan"):
-        run_apply(issue_id="RA-0001", assume_yes=True, llm_assistant=_FakePatchAssistant(issue))
+    with pytest.raises(PatchError, match="outside plan"):
+        RefactorPatcher(tmp_path).generate_changes(
+            plan,
+            issue,
+            llm_edit_plan={
+                "edits": [
+                    {
+                        "file_path": issue.file_path,
+                        "start_line": issue.start_line,
+                        "end_line": issue.end_line,
+                        "replacement": "",
+                    }
+                ]
+            },
+        )
 
     assert "unusedPrivate" in source_path.read_text(encoding="utf-8")
 
@@ -230,22 +266,96 @@ def _save_plan(tmp_path: Path, issue: RefactorIssue, *, files_to_modify: list[st
         planning_source="llm-primary",
     )
     RefactorAgentStorage(tmp_path).save_plan(plan, issue)
+    _write_jacoco_xml(tmp_path, issue.start_line)
+
+
+def _write_jacoco_xml(root: Path, start_line: int) -> None:
+    report_dir = root / "target" / "site" / "jacoco"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_dir.joinpath("jacoco.xml").write_text(
+        f"""
+<report name="demo">
+  <package name="demo">
+    <sourcefile name="OrderService.java">
+      <line nr="{start_line}" mi="0" ci="1"/>
+      <line nr="{start_line + 1}" mi="0" ci="1"/>
+      <line nr="{start_line + 2}" mi="0" ci="1"/>
+    </sourcefile>
+  </package>
+</report>
+""".strip(),
+        encoding="utf-8",
+    )
 
 
 class _FakePatchAssistant:
     def __init__(self, issue: RefactorIssue) -> None:
-        self.issue = issue
-
-    def generate_edit_plan(self, plan: RefactorPlan, issue: RefactorIssue) -> dict:
-        del plan, issue
-        return {
+        edit_arguments = {
             "edits": [
                 {
-                    "file_path": self.issue.file_path,
-                    "start_line": self.issue.start_line,
-                    "end_line": self.issue.end_line,
+                    "file_path": issue.file_path,
+                    "start_line": issue.start_line,
+                    "end_line": issue.end_line,
                     "replacement": "",
                 }
             ],
             "explanation": "LLM removes dead private method",
         }
+        verification_calls = [
+            ToolCall(id="diff", function=_Function(name="inspect_diff", arguments="{}")),
+            *[
+                ToolCall(
+                    id=f"command-{index}",
+                    function=_Function(
+                        name="run_verification_command",
+                        arguments=json.dumps({"command": command}),
+                    ),
+                )
+                for index, command in enumerate(DEFAULT_VERIFICATION_COMMANDS, start=1)
+            ],
+            ToolCall(id="coverage", function=_Function(name="get_coverage_assessment", arguments="{}")),
+        ]
+        self.client = _ScriptedClient(
+            [
+                ChatResponse(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="apply",
+                            function=_Function(name="apply_edits", arguments=json.dumps(edit_arguments)),
+                        )
+                    ],
+                ),
+                ChatResponse(
+                    role="assistant",
+                    content='{"status":"applied","summary":"done","changed_files":[],"risk_notes":[]}',
+                ),
+                ChatResponse(role="assistant", content="", tool_calls=verification_calls),
+                ChatResponse(
+                    role="assistant",
+                    content=(
+                        '{"approved":true,"status":"passed","summary":"verified",'
+                        '"issues":[],"suggestions":[],"evidence_tools":["compile","test","coverage","diff"]}'
+                    ),
+                ),
+            ]
+        )
+
+
+class _ScriptedClient:
+    def __init__(self, responses: list[ChatResponse]) -> None:
+        self.responses = responses
+
+    async def chat(self, *, messages, tools=None) -> ChatResponse:
+        del messages, tools
+        return self.responses.pop(0)
+
+    @property
+    def max_context_window(self) -> int:
+        return 128_000
+
+
+def _successful_runner(command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    del cwd
+    return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")

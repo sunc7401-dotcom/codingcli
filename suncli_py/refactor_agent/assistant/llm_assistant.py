@@ -1,29 +1,28 @@
-"""LLM decision, planning, and controlled edit generation for refactor-agent."""
+"""LLM decision and planning stages for refactor-agent."""
 
 from __future__ import annotations
 
-import asyncio
 import json
-import time
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
-
 from suncli_py.config.config import PaiCliConfig
 from suncli_py.llm.client import LlmClient
 from suncli_py.llm.factory import create_client_from_config
-from suncli_py.llm.models import Message, ToolCall
 from suncli_py.memory.manager import MemoryManager
 from suncli_py.refactor_agent.analysis.java_ast import AstFileAnalysis
 from suncli_py.refactor_agent.assistant.prompts import (
-    edit_system_prompt,
     explanation_system_prompt,
     planning_system_prompt,
-    repair_system_prompt,
     triage_system_prompt,
+)
+from suncli_py.refactor_agent.assistant.react import (
+    ReactAgent,
+    _reset_sync_loop_for_tests,
+    _run_async,
+    _sync_loop_id_for_tests,
 )
 from suncli_py.refactor_agent.assistant.toolbox import RefactorAgentToolbox, RefactorAgentToolRuntime
 from suncli_py.refactor_agent.core.models import (
@@ -36,8 +35,15 @@ from suncli_py.refactor_agent.core.models import (
     RiskLevel,
     Severity,
     TriageResult,
-    VerificationResult,
 )
+
+__all__ = [
+    "RefactorLlmAssistant",
+    "RefactorLlmError",
+    "_reset_sync_loop_for_tests",
+    "_run_async",
+    "_sync_loop_id_for_tests",
+]
 
 
 class RefactorLlmAssistant:
@@ -301,61 +307,12 @@ class RefactorLlmAssistant:
             planning_source="llm-enhanced",
         )
 
-    def generate_edit_plan(self, plan: RefactorPlan, issue: RefactorIssue) -> dict[str, Any] | None:
-        toolbox = RefactorAgentToolbox(Path(".").resolve())
-        tools = RefactorAgentToolRuntime(toolbox, plan=plan, issue=issue)
-        payload = {
-            "issue": issue.to_dict(),
-            "plan": plan.to_dict(),
-            "allowed_files": plan.files_to_modify,
-            "source_excerpt": plan.context.source_excerpt[:10000],
-        }
-        data = self._chat_json(
-            system=edit_system_prompt(),
-            user=(
-                "Generate the patch for this confirmed plan. Only modify allowed_files. Return JSON: "
-                '{"edits":[{"file_path":"...","start_line":1,"end_line":1,"replacement":"..."}],'
-                '"explanation":"...","risk_notes":["..."],"verification_focus":["..."]}. '
-                'If more context is needed, return {"edits":[]}.\n'
-                + json.dumps(payload, ensure_ascii=False)
-            ),
-            tools=tools,
-            root=Path(".").resolve(),
-        )
-        return data if isinstance(data.get("edits"), list) and data.get("edits") else None
-
-    def generate_repair_edit_plan(
-        self,
-        root: Path,
-        plan: RefactorPlan,
-        issue: RefactorIssue,
-        verification: VerificationResult,
-        *,
-        attempt: int,
-    ) -> dict[str, Any] | None:
-        toolbox = RefactorAgentToolbox(root)
-        tools = RefactorAgentToolRuntime(toolbox, plan=plan, issue=issue, verification=verification)
-        data = self._chat_json(
-            system=repair_system_prompt(),
-            user=(
-                "Generate a revised patch. Only edit allowed_files. Return JSON: "
-                '{"edits":[{"file_path":"...","start_line":1,"end_line":1,"replacement":"..."}],'
-                '"explanation":"...","verification_focus":["..."]}. '
-                'If the failure cannot be repaired safely, return {"edits":[]}.\n'
-                + toolbox.as_json(toolbox.repair_context(plan, issue, verification, attempt=attempt))
-            ),
-            tools=tools,
-            root=root,
-        )
-        return data if isinstance(data.get("edits"), list) and data.get("edits") else None
-
     def _chat_json(
         self,
         *,
         system: str,
         user: str,
         tools: RefactorAgentToolRuntime | None = None,
-        max_tool_rounds: int = 4,
         root: Path | None = None,
     ) -> dict[str, Any]:
         resolved_root = (root or Path(".")).resolve()
@@ -363,126 +320,21 @@ class RefactorLlmAssistant:
         if memory is None:
             memory = MemoryManager(self.client, resolved_root)
             self._memory_managers[resolved_root] = memory
-        memory_context = memory.prompt_context(user)
-        assembled_system = system + ("\n\n" + memory_context if memory_context else "")
-        messages = [Message.system(assembled_system), Message.user(user)]
-        schemas = tools.schemas() if tools is not None else None
-        for _ in range(max_tool_rounds + 1):
-            try:
-                response = _run_async(self.client.chat(messages=messages, tools=schemas))
-            except (OSError, RuntimeError) as err:
-                raise RefactorLlmError(f"LLM request failed: {err}") from err
-            if not response:
-                return {}
-            if response.has_tool_calls() and tools is not None:
-                tool_calls = response.tool_calls or []
-                messages.append(
-                    Message.assistant(
-                        content=response.content,
-                        reasoning_content=response.reasoning_content,
-                        tool_calls=tool_calls,
-                    )
-                )
-                tool_outputs = _run_async(_execute_tool_calls(tools, tool_calls))
-                for tool_call, output in zip(tool_calls, tool_outputs, strict=True):
-                    messages.append(
-                        Message.tool(
-                            tool_call.id,
-                            output,
-                        )
-                    )
-                continue
-            return _parse_json_object(response.content)
-        return {}
+        result = ReactAgent(
+            name="refactor-stage",
+            client=self.client,
+            root=resolved_root,
+            system_prompt=system,
+            tools=tools,
+            memory=memory,
+        ).run_json(user)
+        if result.error:
+            raise RefactorLlmError(result.error)
+        return result.data or {}
 
 
 class RefactorLlmError(Exception):
     """Raised when the LLM provider call fails."""
-
-
-async def _execute_tool_calls(tools: RefactorAgentToolRuntime, tool_calls: list[ToolCall]) -> list[str]:
-    """Execute one model-planned tool batch concurrently while preserving result order."""
-    if not tool_calls:
-        return []
-
-    count = len(tool_calls)
-    logger.info("LLM requested {} tool(s)", count)
-    if count > 1:
-        logger.info("Executing {} independent tools in parallel", count)
-    started = time.monotonic()
-    outputs = await asyncio.gather(
-        *[
-            asyncio.to_thread(
-                tools.execute,
-                tool_call.name,
-                _safe_tool_arguments(tool_call.arguments),
-            )
-            for tool_call in tool_calls
-        ]
-    )
-    logger.info("Completed {} tool(s) in {:.0f} ms", count, (time.monotonic() - started) * 1000)
-    return list(outputs)
-
-
-_SYNC_LOOP: asyncio.AbstractEventLoop | None = None
-
-
-def _run_async(coro: Any) -> Any:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return _run_on_sync_loop(coro)
-    close = getattr(coro, "close", None)
-    if callable(close):
-        close()
-    raise RuntimeError("Cannot run synchronous refactor-agent LLM call inside an active asyncio event loop.")
-
-
-def _run_on_sync_loop(coro: Any) -> Any:
-    global _SYNC_LOOP
-    if _SYNC_LOOP is None or _SYNC_LOOP.is_closed():
-        _SYNC_LOOP = asyncio.new_event_loop()
-    return _SYNC_LOOP.run_until_complete(coro)
-
-
-def _close_sync_loop_for_tests() -> None:
-    global _SYNC_LOOP
-    if _SYNC_LOOP is not None and not _SYNC_LOOP.is_closed():
-        _SYNC_LOOP.close()
-    _SYNC_LOOP = None
-
-
-def _sync_loop_id_for_tests() -> int | None:
-    return id(_SYNC_LOOP) if _SYNC_LOOP is not None and not _SYNC_LOOP.is_closed() else None
-
-
-def _reset_sync_loop_for_tests() -> None:
-    _close_sync_loop_for_tests()
-
-
-def _parse_json_object(text: str) -> dict[str, Any]:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = stripped.strip("`")
-        if stripped.lower().startswith("json"):
-            stripped = stripped[4:].strip()
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start < 0 or end < start:
-        return {}
-    try:
-        data = json.loads(stripped[start : end + 1])
-    except json.JSONDecodeError:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _safe_tool_arguments(arguments: str) -> dict[str, Any]:
-    try:
-        data = json.loads(arguments or "{}")
-    except json.JSONDecodeError:
-        return {}
-    return data if isinstance(data, dict) else {}
 
 
 def _string_list(value: Any, fallback: list[str]) -> list[str]:

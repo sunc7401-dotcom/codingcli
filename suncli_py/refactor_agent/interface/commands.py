@@ -12,21 +12,23 @@ from suncli_py.refactor_agent.analysis.java_ast import JavaAstError
 from suncli_py.refactor_agent.analysis.project_detector import ProjectDetector
 from suncli_py.refactor_agent.analysis.scanner import CpdError, JavaSmellScanner
 from suncli_py.refactor_agent.assistant.llm_assistant import RefactorLlmAssistant, RefactorLlmError
+from suncli_py.refactor_agent.assistant.orchestrator import RefactorAgentOrchestrator
 from suncli_py.refactor_agent.assistant.planner import RefactorPlanner
 from suncli_py.refactor_agent.core.models import (
     CharacterizationTestPlan,
     CommandResult,
+    PreModificationResult,
     ProjectProfile,
     RefactorIssue,
     RefactorPlan,
     ScanResult,
     TriageResult,
+    VerificationResult,
 )
 from suncli_py.refactor_agent.core.storage import RefactorAgentStorage
-from suncli_py.refactor_agent.execution.patcher import PatchError, RefactorPatcher
 from suncli_py.refactor_agent.execution.rollback import RollbackError, TaskRollbacker
 from suncli_py.refactor_agent.execution.test_generator import CharacterizationTestGenerator
-from suncli_py.refactor_agent.execution.verifier import CommandRunner, VerificationPipeline, default_command_runner
+from suncli_py.refactor_agent.execution.verifier import CommandRunner, default_command_runner
 from suncli_py.refactor_agent.interface.report import ReportGenerator
 
 
@@ -143,7 +145,7 @@ def run_apply(
     issue_id: str,
     assume_yes: bool = False,
     llm_assistant: RefactorLlmAssistant | None = None,
-    max_repair_attempts: int = 0,
+    max_repair_attempts: int = 2,
     command_runner: CommandRunner | None = None,
 ) -> int:
     root = Path(".").resolve()
@@ -160,73 +162,40 @@ def run_apply(
         print("已取消 apply，未写入任何文件。")
         return 1
 
-    patcher = RefactorPatcher(root)
-    try:
-        assistant = _require_llm_assistant(llm_assistant)
-        try:
-            llm_edit_plan = assistant.generate_edit_plan(plan, issue)
-        except RefactorLlmError as err:
-            raise RefactorAgentError(str(err)) from err
-        if not llm_edit_plan:
-            raise PatchError("LLM did not return any usable edit operation.")
-        changes = patcher.generate_changes(plan, issue, llm_edit_plan=llm_edit_plan)
-        result = patcher.apply_changes(plan, changes, task_dir)
-    except PatchError as err:
-        raise RefactorAgentError(str(err)) from err
-
-    print(
-        format_apply_result(
-            result.changed_files,
-            str(result.snapshot_path),
-            str(result.patch_path),
-            result.diff_text,
-        )
+    assistant = _require_llm_assistant(llm_assistant)
+    workflow = RefactorAgentOrchestrator(
+        root=root,
+        client=assistant.client,
+        storage=storage,
+        command_runner=command_runner,
+    ).run(
+        plan=plan,
+        issue=issue,
+        task_dir=task_dir,
+        max_repair_attempts=max(0, max_repair_attempts),
     )
-    if max_repair_attempts <= 0:
-        return 0
 
-    verifier = VerificationPipeline(root, command_runner=command_runner)
-    verification = verifier.verify(plan, issue, task_dir)
-    storage.save_verification(task_dir, verification)
-    if verification.status in {"passed", "warning"}:
-        _generate_report(root, storage, task_dir, plan, issue)
-        print(format_verification_result(verification))
-        return 0
-
-    for attempt in range(1, max_repair_attempts + 1):
-        print(f"repair attempt {attempt}/{max_repair_attempts}")
-        try:
-            rollback_result = TaskRollbacker(root).rollback(task_dir, force=True)
-            if rollback_result.status != "rolled_back":
-                break
-            try:
-                repair_plan = assistant.generate_repair_edit_plan(root, plan, issue, verification, attempt=attempt)
-            except RefactorLlmError as err:
-                raise RefactorAgentError(str(err)) from err
-            if not repair_plan:
-                break
-            changes = patcher.generate_changes(plan, issue, llm_edit_plan=repair_plan)
-            result = patcher.apply_changes(plan, changes, task_dir)
-            print(
-                format_apply_result(
-                    result.changed_files,
-                    str(result.snapshot_path),
-                    str(result.patch_path),
-                    result.diff_text,
-                )
+    patch_path = task_dir / "patch.diff"
+    snapshot_path = task_dir / "snapshot.json"
+    if patch_path.is_file() and snapshot_path.is_file():
+        print(
+            format_apply_result(
+                workflow.changed_files,
+                str(snapshot_path),
+                str(patch_path),
+                patch_path.read_text(encoding="utf-8"),
             )
-            verification = verifier.verify(plan, issue, task_dir)
-            storage.save_verification(task_dir, verification)
-            if verification.status in {"passed", "warning"}:
-                _generate_report(root, storage, task_dir, plan, issue)
-                print(format_verification_result(verification))
-                return 0
-        except (PatchError, RollbackError) as err:
-            raise RefactorAgentError(str(err)) from err
-
+        )
     _generate_report(root, storage, task_dir, plan, issue)
-    print(format_verification_result(verification))
-    return 1
+    if workflow.pre_modification is not None:
+        print(format_pre_modification_result(workflow.pre_modification))
+    if workflow.verification is not None:
+        print(format_verification_result(workflow.verification))
+    if workflow.error:
+        print(f"apply failed: {workflow.error}")
+    if workflow.rollback is not None:
+        print(format_rollback_result(workflow.rollback))
+    return 0 if workflow.success else 1
 
 
 def _require_llm_assistant(candidate: RefactorLlmAssistant | None) -> RefactorLlmAssistant:
@@ -236,18 +205,6 @@ def _require_llm_assistant(candidate: RefactorLlmAssistant | None) -> RefactorLl
             "LLM assistant is required for refactor-agent. Configure an LLM provider before running scan/plan/apply."
         )
     return assistant
-
-
-def run_verify(*, issue_id: str | None = None, command_runner: CommandRunner | None = None) -> int:
-    root = Path(".").resolve()
-    storage = RefactorAgentStorage(root)
-    loaded = _load_task(storage, issue_id=issue_id, task_id=None)
-    plan, issue, task_dir = loaded
-    result = VerificationPipeline(root, command_runner=command_runner).verify(plan, issue, task_dir)
-    storage.save_verification(task_dir, result)
-    _generate_report(root, storage, task_dir, plan, issue)
-    print(format_verification_result(result))
-    return 0 if result.status in {"passed", "warning"} else 1
 
 
 def run_characterize(
@@ -440,9 +397,11 @@ def format_apply_result(changed_files: list[str], snapshot_path: str, patch_path
     return "\n".join(lines)
 
 
-def format_verification_result(result) -> str:
+def format_verification_result(result: VerificationResult) -> str:
     lines = [
-        f"verify {result.status}",
+        f"自动验证 {result.status}",
+        f"- 验证 Agent 批准: {_yes_no(bool(result.approved))}",
+        f"- 尝试轮次: {result.attempt}",
         f"- 结论: {result.message}",
         "- 命令:",
         *[f"  - {command.command}: exit {command.exit_code}" for command in result.commands],
@@ -455,6 +414,28 @@ def format_verification_result(result) -> str:
     if result.static_findings:
         lines.append("- 静态检查提示:")
         lines.extend(f"  - {finding}" for finding in result.static_findings)
+    if result.issues:
+        lines.append("- 验证问题:")
+        lines.extend(f"  - {issue}" for issue in result.issues)
+    if result.suggestions:
+        lines.append("- 修改建议:")
+        lines.extend(f"  - {suggestion}" for suggestion in result.suggestions)
+    return "\n".join(lines)
+
+
+def format_pre_modification_result(result: PreModificationResult) -> str:
+    lines = [
+        f"修改前基线: {result.status}",
+        f"- 结论: {result.message}",
+        f"- JaCoCo: {_yes_no(result.coverage.jacoco_report_found)}",
+        f"- 目标区域覆盖: {result.coverage.changed_lines_covered}/{result.coverage.changed_lines_total}",
+        f"- 目标文件覆盖: {result.coverage.target_file_lines_covered}/{result.coverage.target_file_lines_total}",
+        "- 命令:",
+        *[f"  - {command.command}: exit {command.exit_code}" for command in result.commands],
+    ]
+    if result.generated_tests:
+        lines.append("- 自动生成的行为锁定测试:")
+        lines.extend(f"  - {file_path}" for file_path in result.generated_tests)
     return "\n".join(lines)
 
 
