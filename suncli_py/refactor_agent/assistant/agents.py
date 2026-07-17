@@ -20,7 +20,13 @@ from suncli_py.refactor_agent.assistant.react import (
     ReactRunResult,
 )
 from suncli_py.refactor_agent.assistant.toolbox import RefactorAgentToolbox, RefactorAgentToolRuntime
-from suncli_py.refactor_agent.core.models import CommandResult, RefactorIssue, RefactorPlan, VerificationResult
+from suncli_py.refactor_agent.core.models import (
+    CommandResult,
+    CoverageAssessment,
+    RefactorIssue,
+    RefactorPlan,
+    VerificationResult,
+)
 from suncli_py.refactor_agent.execution.patcher import (
     PatchApplicationResult,
     PatchError,
@@ -30,7 +36,7 @@ from suncli_py.refactor_agent.execution.verifier import (
     COMPILE_COMMAND,
     COVERAGE_COMMAND,
     DEFAULT_VERIFICATION_COMMANDS,
-    TEST_COMMAND,
+    JACOCO_TEST_COMMAND,
     CommandRunner,
     VerificationPipeline,
 )
@@ -269,8 +275,10 @@ class VerifierToolRuntime:
         self.command_results: dict[str, CommandResult] = {}
         self.diff_inspected = False
         self.coverage_assessed = False
+        self.coverage: CoverageAssessment | None = None
         self.diff_summary = ""
         self.static_findings: list[str] = []
+        self.workspace_inspected = False
 
     def schemas(self) -> list[dict[str, Any]]:
         readonly = [
@@ -284,7 +292,7 @@ class VerifierToolRuntime:
                 "type": "function",
                 "function": {
                     "name": "inspect_diff",
-                    "description": "Read the applied patch and deterministic static diff findings.",
+                    "description": "Rebuild the actual diff from the task snapshot and current workspace.",
                     "parameters": {"type": "object", "properties": {}, "required": []},
                 },
             },
@@ -317,8 +325,7 @@ class VerifierToolRuntime:
         if name in {"read_file", "search_code", "get_plan_context"}:
             return self.readonly.execute(name, arguments)
         if name == "inspect_diff":
-            self.diff_inspected = True
-            self.diff_summary, self.static_findings = self.pipeline.inspect_diff(self.plan, self.task_dir)
+            self.inspect_diff()
             return json.dumps(
                 {"diff": self.diff_summary, "static_findings": self.static_findings},
                 ensure_ascii=False,
@@ -329,11 +336,40 @@ class VerifierToolRuntime:
                 return json.dumps({"error": "command is not registered", "command": command}, ensure_ascii=False)
             if command not in self.command_results:
                 self.command_results[command] = self.pipeline.run_command(command)
+                self._invalidate_file_evidence()
             return json.dumps(self.command_results[command].to_dict(), ensure_ascii=False)
         if name == "get_coverage_assessment":
-            self.coverage_assessed = True
-            return json.dumps(self.pipeline.coverage_assessment(self.plan, self.issue).to_dict(), ensure_ascii=False)
+            return json.dumps(self.get_coverage_assessment().to_dict(), ensure_ascii=False)
         return json.dumps({"error": f"unknown verifier tool: {name}"}, ensure_ascii=False)
+
+    def inspect_diff(self) -> tuple[str, list[str]]:
+        if not self.diff_inspected:
+            self.diff_summary, self.static_findings = self.pipeline.inspect_diff(self.plan, self.task_dir)
+            self.diff_inspected = True
+        return self.diff_summary, self.static_findings
+
+    def get_coverage_assessment(self) -> CoverageAssessment:
+        if self.coverage is None:
+            self.coverage = self.pipeline.coverage_assessment(self.plan, self.issue)
+        self.coverage_assessed = True
+        return self.coverage
+
+    def inspect_workspace(self) -> list[str]:
+        if not self.workspace_inspected:
+            workspace_findings = self.pipeline.inspect_workspace(self.plan, self.task_dir)
+            self.static_findings.extend(
+                finding for finding in workspace_findings if finding not in self.static_findings
+            )
+            self.workspace_inspected = True
+        return self.static_findings
+
+    def _invalidate_file_evidence(self) -> None:
+        self.diff_inspected = False
+        self.coverage_assessed = False
+        self.coverage = None
+        self.diff_summary = ""
+        self.static_findings = []
+        self.workspace_inspected = False
 
     def evidence_error(self) -> str | None:
         missing = [command for command in DEFAULT_VERIFICATION_COMMANDS if command not in self.command_results]
@@ -343,6 +379,7 @@ class VerifierToolRuntime:
             return "inspect_diff must be called before the final decision."
         if not self.coverage_assessed:
             return "get_coverage_assessment must be called before the final decision."
+        self.inspect_workspace()
         return None
 
 
@@ -414,11 +451,13 @@ class VerifierAgent:
         if result.error:
             message = AgentMessage.error("verifier", AgentRole.VERIFIER, result.error)
             try:
-                coverage = runtime.pipeline.coverage_assessment(plan, issue)
+                coverage = runtime.get_coverage_assessment()
             except Exception:
                 coverage = plan.coverage_assessment
             try:
-                diff_summary, static_findings = runtime.pipeline.inspect_diff(plan, task_dir)
+                diff_summary, static_findings = runtime.inspect_diff()
+                runtime.inspect_workspace()
+                static_findings = runtime.static_findings
             except Exception:
                 diff_summary, static_findings = "", []
             verification = VerificationResult(
@@ -443,9 +482,8 @@ class VerifierAgent:
         if infrastructure and infrastructure not in issues:
             issues.append(infrastructure)
         approved = bool(decision.get("approved")) and not hard_issues and not infrastructure
-        coverage = runtime.pipeline.coverage_assessment(plan, issue)
-        if not runtime.diff_inspected:
-            runtime.diff_summary, runtime.static_findings = runtime.pipeline.inspect_diff(plan, task_dir)
+        coverage = runtime.get_coverage_assessment()
+        runtime.inspect_diff()
         has_warning = bool(
             runtime.command_results[COVERAGE_COMMAND].exit_code != 0
             or coverage.needs_characterization_test
@@ -501,13 +539,14 @@ def _is_safe_maven_command(command: str) -> bool:
 
 def _hard_verification_issues(runtime: VerifierToolRuntime) -> list[str]:
     issues: list[str] = []
-    for command in (COMPILE_COMMAND, TEST_COMMAND):
+    for command in (COMPILE_COMMAND, JACOCO_TEST_COMMAND):
         result = runtime.command_results.get(command)
         if result is None:
             issues.append(f"Mandatory verification command was not run: {command}")
         elif result.exit_code != 0:
             output = (result.stderr or result.stdout or "command failed without output")[-1000:]
             issues.append(f"Verification command failed: {command}\n{output}")
+    issues.extend(finding for finding in runtime.static_findings if finding not in issues)
     return issues
 
 

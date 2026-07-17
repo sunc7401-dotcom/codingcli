@@ -302,7 +302,6 @@ class _FakePatchAssistant:
             "explanation": "LLM removes dead private method",
         }
         verification_calls = [
-            ToolCall(id="diff", function=_Function(name="inspect_diff", arguments="{}")),
             *[
                 ToolCall(
                     id=f"command-{index}",
@@ -313,6 +312,7 @@ class _FakePatchAssistant:
                 )
                 for index, command in enumerate(DEFAULT_VERIFICATION_COMMANDS, start=1)
             ],
+            ToolCall(id="diff", function=_Function(name="inspect_diff", arguments="{}")),
             ToolCall(id="coverage", function=_Function(name="get_coverage_assessment", arguments="{}")),
         ]
         self.client = _ScriptedClient(

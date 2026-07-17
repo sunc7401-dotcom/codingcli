@@ -30,7 +30,11 @@ from suncli_py.refactor_agent.execution.test_generator import (
     TestGenerationError as GenerationError,
 )
 from suncli_py.refactor_agent.execution.verifier import (
+    COVERAGE_COMMAND,
     DEFAULT_VERIFICATION_COMMANDS,
+    JACOCO_TEST_COMMAND,
+    TEST_COMMAND,
+    TEST_COMPILE_COMMAND,
     PreModificationVerifier,
 )
 
@@ -87,6 +91,14 @@ def test_coverage_gap_generates_test_before_modifier_and_keeps_it(
         (task_dir / "preflight" / "test_generator.json").read_text(encoding="utf-8")
     )
     assert generator_record["message"]["from_role"] == "TEST_GENERATOR"
+    generated_test_commands = [command["command"] for command in generator_record["commands"]]
+    assert generated_test_commands == [
+        TEST_COMPILE_COMMAND,
+        TEST_COMMAND,
+        JACOCO_TEST_COMMAND,
+        COVERAGE_COMMAND,
+    ]
+    assert sum(command.endswith(" test") for command in generated_test_commands) == 2
 
 
 def test_generated_test_policy_rejects_trivial_or_disabled_tests(tmp_path: Path) -> None:
@@ -370,15 +382,19 @@ def _modifier_final() -> ChatResponse:
 
 
 def _verification_tools() -> ChatResponse:
-    calls = [ToolCall(id="diff", function=_Function(name="inspect_diff", arguments="{}"))]
-    calls.extend(
+    calls = [
         ToolCall(
             id=f"command-{index}",
             function=_Function(name="run_verification_command", arguments=json.dumps({"command": command})),
         )
         for index, command in enumerate(DEFAULT_VERIFICATION_COMMANDS, start=1)
+    ]
+    calls.extend(
+        [
+            ToolCall(id="diff", function=_Function(name="inspect_diff", arguments="{}")),
+            ToolCall(id="coverage", function=_Function(name="get_coverage_assessment", arguments="{}")),
+        ]
     )
-    calls.append(ToolCall(id="coverage", function=_Function(name="get_coverage_assessment", arguments="{}")))
     return ChatResponse(role="assistant", content="", tool_calls=calls)
 
 

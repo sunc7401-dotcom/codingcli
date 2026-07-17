@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import difflib
+import json
 import shlex
 import shutil
 import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 from suncli_py.refactor_agent.analysis.coverage import CoverageAnalyzer
 from suncli_py.refactor_agent.core.models import (
@@ -17,14 +20,18 @@ from suncli_py.refactor_agent.core.models import (
     RefactorPlan,
     VerificationResult,
 )
+from suncli_py.refactor_agent.execution.workspace import capture_workspace_manifest
 
 CommandRunner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
 
 COMPILE_COMMAND = "mvn -q -DskipTests compile"
 TEST_COMPILE_COMMAND = "mvn -q -DskipTests test-compile"
 TEST_COMMAND = "mvn test"
-COVERAGE_COMMAND = "mvn org.jacoco:jacoco-maven-plugin:prepare-agent test org.jacoco:jacoco-maven-plugin:report"
-DEFAULT_VERIFICATION_COMMANDS = (COMPILE_COMMAND, TEST_COMMAND, COVERAGE_COMMAND)
+JACOCO_TEST_COMMAND = "mvn org.jacoco:jacoco-maven-plugin:prepare-agent test"
+JACOCO_REPORT_COMMAND = "mvn org.jacoco:jacoco-maven-plugin:report"
+# Backward-compatible name for callers that only need the report phase.
+COVERAGE_COMMAND = JACOCO_REPORT_COMMAND
+DEFAULT_VERIFICATION_COMMANDS = (COMPILE_COMMAND, JACOCO_TEST_COMMAND, JACOCO_REPORT_COMMAND)
 
 
 def default_command_runner(command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -49,13 +56,14 @@ class VerificationPipeline:
     def verify(self, plan: RefactorPlan, issue: RefactorIssue, task_dir: Path) -> VerificationResult:
         commands = [
             self.run_command(COMPILE_COMMAND),
-            self.run_command(TEST_COMMAND),
+            self.run_command(JACOCO_TEST_COMMAND),
         ]
-        coverage_command = self.run_command(COVERAGE_COMMAND)
-        commands.append(coverage_command)
+        coverage_report_command = self.run_command(JACOCO_REPORT_COMMAND)
+        commands.append(coverage_report_command)
 
         coverage = self.coverage_assessment(plan, issue)
-        diff_summary, static_findings = self.inspect_diff(plan, task_dir)
+        diff_summary, diff_findings = self.inspect_diff(plan, task_dir)
+        static_findings = [*diff_findings, *self.inspect_workspace(plan, task_dir)]
 
         failed = [result for result in commands[:2] if result.exit_code != 0]
         if failed:
@@ -68,9 +76,19 @@ class VerificationPipeline:
                 message=_failure_message(failed[0]),
             )
 
-        if coverage_command.exit_code != 0 or coverage.needs_characterization_test or static_findings:
+        if static_findings:
+            return VerificationResult(
+                status="failed",
+                commands=commands,
+                coverage=coverage,
+                static_findings=static_findings,
+                diff_summary=diff_summary,
+                message="工作区完整性检查失败: " + "; ".join(static_findings),
+            )
+
+        if coverage_report_command.exit_code != 0 or coverage.needs_characterization_test:
             message = coverage.recommendation
-            if coverage_command.exit_code != 0:
+            if coverage_report_command.exit_code != 0:
                 message = "JaCoCo 覆盖命令执行失败，已降级为覆盖不足警告。"
             return VerificationResult(
                 status="warning",
@@ -106,7 +124,10 @@ class VerificationPipeline:
         return CoverageAnalyzer(self.root).assess(plan, issue)
 
     def inspect_diff(self, plan: RefactorPlan, task_dir: Path) -> tuple[str, list[str]]:
-        return _read_text_if_exists(task_dir / "diff_summary.txt"), _static_findings(plan, task_dir)
+        return _actual_workspace_diff(self.root, plan, task_dir)
+
+    def inspect_workspace(self, plan: RefactorPlan, task_dir: Path) -> list[str]:
+        return _workspace_findings(self.root, plan, task_dir)
 
 
 class PreModificationVerifier:
@@ -118,8 +139,8 @@ class PreModificationVerifier:
     def verify(self, plan: RefactorPlan, issue: RefactorIssue) -> PreModificationResult:
         commands = [
             self.pipeline.run_command(COMPILE_COMMAND),
-            self.pipeline.run_command(TEST_COMMAND),
-            self.pipeline.run_command(COVERAGE_COMMAND),
+            self.pipeline.run_command(JACOCO_TEST_COMMAND),
+            self.pipeline.run_command(JACOCO_REPORT_COMMAND),
         ]
         infrastructure = next((result for result in commands if result.exit_code == 127), None)
         if infrastructure is not None:
@@ -181,20 +202,109 @@ class PreModificationVerifier:
         )
 
 
-def _read_text_if_exists(path: Path) -> str:
-    return path.read_text(encoding="utf-8") if path.is_file() else ""
-
-
-def _static_findings(plan: RefactorPlan, task_dir: Path) -> list[str]:
-    diff_text = _read_text_if_exists(task_dir / "patch.diff")
-    if not diff_text:
-        return ["未找到 patch.diff，无法核对 diff 证据。"]
+def _actual_workspace_diff(root: Path, plan: RefactorPlan, task_dir: Path) -> tuple[str, list[str]]:
     findings: list[str] = []
-    for file_path in plan.files_to_modify:
-        marker = f"b/{file_path}"
-        if marker not in diff_text:
-            findings.append(f"计划文件未出现在 diff 中: {file_path}")
+    planned_files = {_normalize_diff_path(file_path) for file_path in plan.files_to_modify}
+    generated_tests = {
+        _normalize_diff_path(file_path) for file_path in plan.coverage_assessment.generated_tests
+    }
+    snapshot = _read_snapshot(task_dir, findings)
+    if snapshot is None:
+        return "", findings
+    before_entries = {
+        _normalize_diff_path(str(entry.get("path") or "")): entry
+        for entry in snapshot.get("files", [])
+        if isinstance(entry, dict) and entry.get("path")
+    }
+    diff_parts: list[str] = []
+    for file_path in sorted(planned_files | generated_tests):
+        current_path = _safe_workspace_path(root, file_path, findings)
+        if current_path is None or not current_path.is_file():
+            findings.append(f"验证时文件不存在: {file_path}")
+            continue
+        if file_path in planned_files:
+            entry = before_entries.get(file_path)
+            before_copy = task_dir / str(entry.get("before_copy") or "") if entry else None
+            if before_copy is None or not before_copy.is_file():
+                findings.append(f"初始快照缺少计划文件: {file_path}")
+                continue
+            before_text = before_copy.read_text(encoding="utf-8")
+            from_file = f"a/{file_path}"
+        else:
+            before_text = ""
+            from_file = "/dev/null"
+        after_text = current_path.read_text(encoding="utf-8")
+        diff_parts.extend(
+            difflib.unified_diff(
+                before_text.splitlines(keepends=True),
+                after_text.splitlines(keepends=True),
+                fromfile=from_file,
+                tofile=f"b/{file_path}",
+                lineterm="\n",
+            )
+        )
+    diff_text = "".join(diff_parts)
+    if not diff_text:
+        findings.append("实际工作区未发现计划内代码变化。")
+    return diff_text, findings
+
+
+def _workspace_findings(root: Path, plan: RefactorPlan, task_dir: Path) -> list[str]:
+    findings: list[str] = []
+    snapshot = _read_snapshot(task_dir, findings)
+    if snapshot is None:
+        return findings
+    raw_manifest = snapshot.get("workspace_manifest")
+    if not isinstance(raw_manifest, dict):
+        return ["snapshot.json 缺少 workspace_manifest，无法独立验证工作区范围。"]
+    before_manifest = {
+        _normalize_diff_path(str(path)): str(digest)
+        for path, digest in raw_manifest.items()
+        if str(path) and str(digest)
+    }
+    current_manifest = capture_workspace_manifest(root)
+    changed_files = {
+        path
+        for path in before_manifest.keys() | current_manifest.keys()
+        if before_manifest.get(path) != current_manifest.get(path)
+    }
+    allowed_files = {
+        *(_normalize_diff_path(path) for path in plan.files_to_modify),
+        *(_normalize_diff_path(path) for path in plan.coverage_assessment.generated_tests),
+    }
+    for file_path in sorted(changed_files - allowed_files):
+        findings.append(f"任务开始后出现计划外工作区变化: {file_path}")
     return findings
+
+
+def _read_snapshot(task_dir: Path, findings: list[str]) -> dict[str, Any] | None:
+    snapshot_path = task_dir / "snapshot.json"
+    if not snapshot_path.is_file():
+        findings.append("未找到 snapshot.json，无法核对真实工作区。")
+        return None
+    try:
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as err:
+        findings.append(f"无法读取 snapshot.json: {err}")
+        return None
+    if not isinstance(snapshot, dict):
+        findings.append("snapshot.json 格式错误。")
+        return None
+    return snapshot
+
+
+def _safe_workspace_path(root: Path, file_path: str, findings: list[str]) -> Path | None:
+    path = (root / file_path).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        findings.append(f"验证路径越出项目根目录: {file_path}")
+        return None
+    return path
+
+
+def _normalize_diff_path(file_path: str) -> str:
+    return file_path.replace("\\", "/").lstrip("/")
 
 
 def _failure_message(result: CommandResult) -> str:

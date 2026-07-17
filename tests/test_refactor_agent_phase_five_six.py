@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import subprocess
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
+from suncli_py.refactor_agent.assistant.agents import VerifierToolRuntime
 from suncli_py.refactor_agent.core.models import (
     CoverageAssessment,
     Evidence,
@@ -19,7 +21,10 @@ from suncli_py.refactor_agent.core.models import (
 from suncli_py.refactor_agent.core.storage import RefactorAgentStorage
 from suncli_py.refactor_agent.execution.patch_validator import AstPatchValidator
 from suncli_py.refactor_agent.execution.patcher import RefactorPatcher
-from suncli_py.refactor_agent.execution.verifier import VerificationPipeline
+from suncli_py.refactor_agent.execution.verifier import (
+    DEFAULT_VERIFICATION_COMMANDS,
+    VerificationPipeline,
+)
 from suncli_py.refactor_agent.interface.commands import run_characterize, run_rollback
 
 
@@ -31,18 +36,121 @@ def test_verification_pipeline_runs_maven_and_records_jacoco_coverage(
     _save_plan(tmp_path, issue)
     _write_jacoco_xml(tmp_path, issue.start_line)
     task_dir = next((tmp_path / ".paicli" / "refactor-agent" / "tasks").iterdir())
-    (task_dir / "patch.diff").write_text(
-        "diff --git a/src/main/java/demo/OrderService.java b/src/main/java/demo/OrderService.java\n",
+    plan, _ = RefactorAgentStorage(tmp_path).load_task_plan(task_dir)
+    RefactorPatcher(tmp_path).ensure_initial_snapshot(plan, task_dir)
+    source_path.write_text(
+        source_path.read_text(encoding="utf-8").replace(
+            '    private void unusedPrivate() {\n        System.out.println("unused");\n    }\n\n',
+            "",
+        ),
         encoding="utf-8",
     )
-    (task_dir / "diff_summary.txt").write_text("summary", encoding="utf-8")
-    result = VerificationPipeline(tmp_path, command_runner=_successful_runner).verify(
-        RefactorAgentStorage(tmp_path).load_task_plan(task_dir)[0], issue, task_dir
-    )
+    executed_commands: list[str] = []
+
+    def recording_runner(command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        executed_commands.append(" ".join(command))
+        return _successful_runner(command, cwd)
+
+    result = VerificationPipeline(tmp_path, command_runner=recording_runner).verify(plan, issue, task_dir)
 
     assert result.status == "passed"
     assert result.coverage.jacoco_report_found is True
     assert result.coverage.changed_lines_covered == 3
+    assert executed_commands == list(DEFAULT_VERIFICATION_COMMANDS)
+    assert sum(command.endswith(" test") for command in executed_commands) == 1
+
+
+def test_workspace_inspection_rejects_unplanned_files_but_allows_generated_tests(tmp_path: Path) -> None:
+    source_path = _write_java_file(tmp_path)
+    issue = _dead_code_issue(source_path)
+    _save_plan(tmp_path, issue)
+    task_dir = next((tmp_path / ".paicli" / "refactor-agent" / "tasks").iterdir())
+    plan, _ = RefactorAgentStorage(tmp_path).load_task_plan(task_dir)
+    generated_test = "src/test/java/demo/OrderServiceCharacterizationTest.java"
+    plan = replace(
+        plan,
+        coverage_assessment=replace(plan.coverage_assessment, generated_tests=[generated_test]),
+    )
+    RefactorPatcher(tmp_path).ensure_initial_snapshot(plan, task_dir)
+    source_path.write_text(
+        source_path.read_text(encoding="utf-8").replace(
+            '    private void unusedPrivate() {\n        System.out.println("unused");\n    }\n\n',
+            "",
+        ),
+        encoding="utf-8",
+    )
+    generated_path = tmp_path / generated_test
+    generated_path.parent.mkdir(parents=True)
+    generated_path.write_text("package demo;\nclass OrderServiceCharacterizationTest {}\n", encoding="utf-8")
+    (tmp_path / "pom.xml").write_text("<project><name>unexpected</name></project>", encoding="utf-8")
+
+    pipeline = VerificationPipeline(tmp_path)
+    diff_text, diff_findings = pipeline.inspect_diff(plan, task_dir)
+    workspace_findings = pipeline.inspect_workspace(plan, task_dir)
+
+    assert diff_findings == []
+    assert f"b/{issue.file_path}" in diff_text
+    assert f"b/{generated_test}" in diff_text
+    assert workspace_findings == ["任务开始后出现计划外工作区变化: pom.xml"]
+
+
+def test_verifier_runtime_caches_coverage_and_diff_evidence(tmp_path: Path, monkeypatch) -> None:
+    source_path = _write_java_file(tmp_path)
+    issue = _dead_code_issue(source_path)
+    _save_plan(tmp_path, issue)
+    _write_jacoco_xml(tmp_path, issue.start_line)
+    task_dir = next((tmp_path / ".paicli" / "refactor-agent" / "tasks").iterdir())
+    plan, _ = RefactorAgentStorage(tmp_path).load_task_plan(task_dir)
+    RefactorPatcher(tmp_path).ensure_initial_snapshot(plan, task_dir)
+    source_path.write_text(
+        source_path.read_text(encoding="utf-8").replace(
+            '    private void unusedPrivate() {\n        System.out.println("unused");\n    }\n\n',
+            "",
+        ),
+        encoding="utf-8",
+    )
+    runtime = VerifierToolRuntime(
+        root=tmp_path,
+        plan=plan,
+        issue=issue,
+        task_dir=task_dir,
+        command_runner=_successful_runner,
+    )
+    coverage_calls = 0
+    diff_calls = 0
+    original_coverage = runtime.pipeline.coverage_assessment
+    original_diff = runtime.pipeline.inspect_diff
+
+    def counted_coverage(plan: RefactorPlan, issue: RefactorIssue):
+        nonlocal coverage_calls
+        coverage_calls += 1
+        return original_coverage(plan, issue)
+
+    def counted_diff(plan: RefactorPlan, task_dir: Path):
+        nonlocal diff_calls
+        diff_calls += 1
+        return original_diff(plan, task_dir)
+
+    monkeypatch.setattr(runtime.pipeline, "coverage_assessment", counted_coverage)
+    monkeypatch.setattr(runtime.pipeline, "inspect_diff", counted_diff)
+
+    runtime.execute("get_coverage_assessment", {})
+    runtime.execute("get_coverage_assessment", {})
+    runtime.execute("inspect_diff", {})
+    runtime.execute("inspect_diff", {})
+
+    assert coverage_calls == 1
+    assert diff_calls == 1
+
+    runtime.execute("run_verification_command", {"command": DEFAULT_VERIFICATION_COMMANDS[0]})
+    assert runtime.coverage is None
+    assert runtime.diff_inspected is False
+
+    runtime.execute("get_coverage_assessment", {})
+    runtime.execute("inspect_diff", {})
+
+    assert coverage_calls == 2
+    assert diff_calls == 2
 
 
 def test_characterize_writes_candidate_test_after_confirmation_and_precheck(

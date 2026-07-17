@@ -25,6 +25,7 @@ from suncli_py.refactor_agent.execution.test_generator import (
 )
 from suncli_py.refactor_agent.execution.verifier import (
     COVERAGE_COMMAND,
+    JACOCO_TEST_COMMAND,
     TEST_COMMAND,
     TEST_COMPILE_COMMAND,
     CommandRunner,
@@ -206,7 +207,7 @@ class TestGeneratorToolRuntime:
         self.commands = [
             self.pipeline.run_command(TEST_COMPILE_COMMAND),
             self.pipeline.run_command(TEST_COMMAND),
-            self.pipeline.run_command(TEST_COMMAND),
+            self.pipeline.run_command(JACOCO_TEST_COMMAND),
             self.pipeline.run_command(COVERAGE_COMMAND),
         ]
         infrastructure = next((command for command in self.commands if command.exit_code == 127), None)

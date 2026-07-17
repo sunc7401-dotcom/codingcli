@@ -10,6 +10,7 @@ from suncli_py.llm.models import ChatResponse, ToolCall, _Function
 from suncli_py.refactor_agent.assistant.agents import (
     ModifierAgent,
     ModifierToolRuntime,
+    VerifierAgent,
     VerifierToolRuntime,
 )
 from suncli_py.refactor_agent.assistant.orchestrator import RefactorAgentOrchestrator
@@ -27,6 +28,7 @@ from suncli_py.refactor_agent.core.models import (
 )
 from suncli_py.refactor_agent.core.storage import RefactorAgentStorage
 from suncli_py.refactor_agent.execution.patch_validator import AstPatchValidator
+from suncli_py.refactor_agent.execution.patcher import RefactorPatcher
 from suncli_py.refactor_agent.execution.verifier import (
     DEFAULT_VERIFICATION_COMMANDS,
     VerificationPipeline,
@@ -177,6 +179,33 @@ def test_verifier_rejects_unregistered_commands_and_classifies_timeout(tmp_path:
     )
     assert timed_out.exit_code == 127
     assert "timed out" in timed_out.stderr
+
+
+def test_verifier_cannot_approve_real_workspace_changes_outside_plan(tmp_path: Path) -> None:
+    source, issue, plan, task_dir = _project(tmp_path)
+    RefactorPatcher(tmp_path).ensure_initial_snapshot(plan, task_dir)
+    source.write_text(
+        source.read_text(encoding="utf-8").replace(
+            "    private int unusedPrivate(int value) {\n        return value * 2;\n    }\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "pom.xml").write_text("<project />", encoding="utf-8")
+    client = _ScriptedClient([_verification_tools(), _verifier_final(approved=True)])
+
+    outcome = VerifierAgent(client, tmp_path).run(
+        plan=plan,
+        issue=issue,
+        task_dir=task_dir,
+        attempt=1,
+        command_runner=_successful_runner,
+    )
+
+    assert outcome.verification is not None
+    assert outcome.verification.approved is False
+    assert outcome.verification.status == "failed"
+    assert "任务开始后出现计划外工作区变化: pom.xml" in outcome.verification.issues
 
 
 def test_verifier_rejection_is_fed_back_to_modifier_before_retry(
@@ -425,16 +454,18 @@ def _modifier_final() -> ChatResponse:
 
 
 def _verification_tools() -> ChatResponse:
-    calls = [ToolCall(id="diff", function=_Function(name="inspect_diff", arguments="{}"))]
-    calls.extend(
+    calls = [
         ToolCall(
             id=f"command-{index}",
             function=_Function(name="run_verification_command", arguments=json.dumps({"command": command})),
         )
         for index, command in enumerate(DEFAULT_VERIFICATION_COMMANDS, start=1)
-    )
-    calls.append(
-        ToolCall(id="coverage", function=_Function(name="get_coverage_assessment", arguments="{}"))
+    ]
+    calls.extend(
+        [
+            ToolCall(id="diff", function=_Function(name="inspect_diff", arguments="{}")),
+            ToolCall(id="coverage", function=_Function(name="get_coverage_assessment", arguments="{}")),
+        ]
     )
     return ChatResponse(role="assistant", content="", tool_calls=calls)
 

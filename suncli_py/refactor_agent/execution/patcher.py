@@ -14,6 +14,7 @@ from typing import Any
 
 from suncli_py.refactor_agent.core.models import RefactoringType, RefactorIssue, RefactorPlan, SmellType
 from suncli_py.refactor_agent.execution.patch_validator import AstPatchValidator
+from suncli_py.refactor_agent.execution.workspace import capture_workspace_manifest
 
 IGNORED_PARTS = {".git", "target", "build", ".gradle", "node_modules"}
 
@@ -61,6 +62,9 @@ class RefactorPatcher:
 
     def ensure_initial_snapshot(self, plan: RefactorPlan, task_dir: Path) -> Path:
         """Create the immutable production-file snapshot before pre-modification work starts."""
+        snapshot_path = task_dir / "snapshot.json"
+        if snapshot_path.is_file():
+            return snapshot_path
         snapshot_paths = {
             _normalize_relative_path(file_path): self._resolve_allowed_file(file_path)
             for file_path in plan.files_to_modify
@@ -264,6 +268,7 @@ class RefactorPatcher:
             "git_status": git_status,
             "planned_files": plan.files_to_modify,
             "user_changes_before_task": bool(git_status),
+            "workspace_manifest": capture_workspace_manifest(self.root),
             "files": [
                 {
                     "path": file_path,
